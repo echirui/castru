@@ -7,6 +7,7 @@ pub mod protocol;
 pub mod discovery;
 pub mod controllers;
 pub mod server;
+pub mod transcode;
 
 pub use client::CastClient;
 pub use error::CastError;

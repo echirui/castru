@@ -18,4 +18,8 @@ pub enum CastError {
     Streaming(String),
     #[error("TUI Error: {0}")]
     Tui(String),
+    #[error("Probe Error: {0}")]
+    Probe(String),
+    #[error("Transcoding Error: {0}")]
+    Transcoding(String),
 }

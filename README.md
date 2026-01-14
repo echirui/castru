@@ -110,7 +110,9 @@ Castru also provides a command-line interface for common tasks:
   ```bash
   cargo run -- cast ./myvideo.mp4 https://example.com/video.mp4
   ```
-  *(Controls: Space to Pause/Play, N for Next, P for Previous, Q to Quit)*
+  *(Controls: Space to Pause/Play, N for Next, P for Previous, Left/Right to Seek, Q to Quit)*
+
+  > **Note**: Castru automatically detects unsupported media files (e.g., MKV, AVI) and transcodes them on-the-fly using `ffmpeg` if installed.
 
   **Options:**
   - `--ip <IP>`: Connect directly to a specific IP address.

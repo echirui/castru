@@ -217,23 +217,38 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     let mut tui_rx = tui.start()?;
     
     // TUI Loop
-    let mut current_status = PlaybackStatus::Idle; // TODO: Fetch real status
-    let current_time = 0.0;
+    let mut current_status = PlaybackStatus::Idle; 
     
-    // Initial Load
-    let mut current_media_idx = 0;
+    struct AppState {
+        is_transcoding: bool,
+        current_time: f64,
+        source: Option<MediaSource>,
+        current_media_idx: usize,
+    }
     
+    let mut app_state = AppState { 
+        is_transcoding: false, 
+        current_time: 0.0, 
+        source: None,
+        current_media_idx: 0,
+    };
+
     // Load first item
     if let Some(source) = playlist.front() {
-        if let Err(e) = load_media(&app, &server, source, &server_url_base).await {
-            eprintln!("Failed to load media: {}", e);
+        app_state.current_media_idx = 0;
+        app_state.source = Some(source.clone());
+        match load_media(&app, &server, source, &server_url_base, 0.0).await {
+            Ok(is_tx) => {
+                 app_state.is_transcoding = is_tx;
+                 app_state.current_time = 0.0;
+            },
+            Err(e) => eprintln!("Failed to load media: {}", e),
         }
     }
     
     // Event Loop
-    let mut events = client.events(); // We need a way to peek messages from app wrapper?
-    // Actually `app` does not expose event stream directly but client does.
-    // The events are broadcast.
+    let mut events = client.events();
+    use castru::protocol::media::{MediaResponse, NAMESPACE as MEDIA_NAMESPACE};
 
     loop {
         tokio::select! {
@@ -241,8 +256,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                 match cmd {
                     TuiCommand::Quit => break,
                     TuiCommand::Pause => {
-                        // Toggle
-                        let _ = app.pause(1).await; // Hack: assumes session 1
+                        let _ = app.pause(1).await;
                         current_status = PlaybackStatus::Paused;
                     },
                     TuiCommand::Play => {
@@ -250,32 +264,98 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          current_status = PlaybackStatus::Playing;
                     },
                     TuiCommand::Next => {
-                        current_media_idx += 1;
-                         if let Some(source) = playlist.get(current_media_idx) {
-                            if let Err(e) = load_media(&app, &server, source, &server_url_base).await {
-                                 // Handle error
+                        app_state.current_media_idx += 1;
+                         if let Some(source) = playlist.get(app_state.current_media_idx) {
+                             app_state.source = Some(source.clone());
+                            if let Ok(is_tx) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                 app_state.is_transcoding = is_tx;
+                                 app_state.current_time = 0.0;
                             }
                          } else {
-                             // End of playlist
-                             current_media_idx -= 1; 
+                             app_state.current_media_idx -= 1; 
                          }
                     },
                     TuiCommand::Previous => {
-                        if current_media_idx > 0 {
-                            current_media_idx -= 1;
-                             if let Some(source) = playlist.get(current_media_idx) {
-                                let _ = load_media(&app, &server, source, &server_url_base).await;
+                        if app_state.current_media_idx > 0 {
+                            app_state.current_media_idx -= 1;
+                             if let Some(source) = playlist.get(app_state.current_media_idx) {
+                                app_state.source = Some(source.clone());
+                                if let Ok(is_tx) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                     app_state.is_transcoding = is_tx;
+                                     app_state.current_time = 0.0;
+                                }
                              }
                         }
+                    },
+                    TuiCommand::SeekForward(s) => {
+                         let new_time = app_state.current_time + s as f64;
+                         if app_state.is_transcoding {
+                             if let Some(src) = &app_state.source {
+                                 // Reload
+                                 if let Ok(is_tx) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                     app_state.is_transcoding = is_tx;
+                                     // Don't reset time here, we want to display the target time
+                                     app_state.current_time = new_time;
+                                 }
+                             }
+                         } else {
+                             let _ = app.seek(1, new_time as f32).await;
+                             app_state.current_time = new_time; 
+                         }
+                    },
+                    TuiCommand::SeekBackward(s) => {
+                         let new_time = (app_state.current_time - s as f64).max(0.0);
+                         if app_state.is_transcoding {
+                             if let Some(src) = &app_state.source {
+                                 // Reload
+                                 if let Ok(is_tx) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                     app_state.is_transcoding = is_tx;
+                                     app_state.current_time = new_time;
+                                 }
+                             }
+                         } else {
+                             let _ = app.seek(1, new_time as f32).await;
+                             app_state.current_time = new_time; 
+                         }
                     },
                     _ => {}
                 }
                 // Update TUI
-                let _ = tui.draw_status(&format!("{:?}", current_status), current_time, None);
+                let _ = tui.draw_status(&format!("{:?}", current_status), app_state.current_time as f32, None);
             }
-            Ok(_event) = events.recv() => {
-                // TODO: Parse status to update current_time and check for End of Stream (EOS)
-                // If EOS -> Next
+            Ok(event) = events.recv() => {
+                 if event.namespace == MEDIA_NAMESPACE {
+                     if let Ok(MediaResponse::MediaStatus { status, .. }) = serde_json::from_str::<MediaResponse>(&event.payload) {
+                          if let Some(s) = status.first() {
+                              app_state.current_time = s.current_time as f64;
+                              
+                              match s.player_state.as_str() {
+                                  "PLAYING" => current_status = PlaybackStatus::Playing,
+                                  "PAUSED" => current_status = PlaybackStatus::Paused,
+                                  "BUFFERING" => current_status = PlaybackStatus::Buffering,
+                                  "IDLE" => {
+                                       current_status = PlaybackStatus::Idle;
+                                       if s.idle_reason.as_deref() == Some("FINISHED") {
+                                            // Auto-Next
+                                            app_state.current_media_idx += 1;
+                                             if let Some(source) = playlist.get(app_state.current_media_idx) {
+                                                 app_state.source = Some(source.clone());
+                                                if let Ok(is_tx) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                                     app_state.is_transcoding = is_tx;
+                                                     app_state.current_time = 0.0;
+                                                }
+                                             } else {
+                                                 // End of playlist
+                                                 // Keep idle
+                                             }
+                                       }
+                                  },
+                                  _ => {}
+                              }
+                              let _ = tui.draw_status(&format!("{:?}", current_status), app_state.current_time as f32, None);
+                          }
+                     }
+                 }
             }
         }
     }
@@ -284,14 +364,47 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn load_media(app: &DefaultMediaReceiver, server: &StreamServer, source: &MediaSource, server_base: &str) -> Result<(), Box<dyn Error>> {
-     let (url, content_type) = match source {
+use castru::transcode::{probe_media, needs_transcoding, spawn_ffmpeg, TranscodeConfig, MediaProbeResult};
+
+async fn load_media(
+    app: &DefaultMediaReceiver, 
+    server: &StreamServer, 
+    source: &MediaSource, 
+    server_base: &str,
+    start_time: f64
+) -> Result<bool, Box<dyn Error>> {
+     let (url, content_type, is_transcoding) = match source {
         MediaSource::FilePath(path_str) => {
             let path = Path::new(path_str);
-            server.set_file(path.to_path_buf());
-            (server_base.to_string(), get_mime_type(path).to_string())
+            
+            // Probe media
+            let probe = match probe_media(path).await {
+                Ok(p) => p,
+                Err(e) => {
+                     eprintln!("Warning: Probe failed: {}, assuming supported.", e);
+                     MediaProbeResult { video_codec: None, audio_codec: None, duration: None }
+                }
+            };
+
+            if needs_transcoding(&probe) {
+                 println!("Transcoding needed (Video: {:?}, Audio: {:?})", probe.video_codec, probe.audio_codec);
+                 let config = TranscodeConfig {
+                     input_path: path.to_path_buf(),
+                     start_time, // Use provided start_time
+                     target_video_codec: "libx264".to_string(),
+                     target_audio_codec: "aac".to_string(),
+                 };
+                 
+                 let pipeline = spawn_ffmpeg(&config)?;
+                 server.set_transcode_output(pipeline).await;
+                 
+                 (server_base.to_string(), "video/mp4".to_string(), true)
+            } else {
+                server.set_file(path.to_path_buf()).await;
+                (server_base.to_string(), get_mime_type(path).to_string(), false)
+            }
         },
-        MediaSource::Url(u) => (u.clone(), "video/mp4".to_string()),
+        MediaSource::Url(u) => (u.clone(), "video/mp4".to_string(), false),
      };
 
     let media_info = MediaInformation {
@@ -301,8 +414,18 @@ async fn load_media(app: &DefaultMediaReceiver, server: &StreamServer, source: &
         metadata: None,
     };
     
-    app.load(media_info, true, 0.0).await?;
-    Ok(())
+    // For non-transcoding, we use start_time in load command.
+    // For transcoding, we handled it in ffmpeg -ss, so we can tell Cast to start at 0.0 relative to the stream?
+    // OR we tell Cast to start at `start_time` but that might confuse it if the stream doesn't match?
+    // If we pipe ffmpeg output, it is a new stream starting from 0 (bytes).
+    // If we say start_time=30.0, Cast might expect timestamps to be 30.0+.
+    // ffmpeg -ss output usually resets timestamps to 0 unless -copyts is used.
+    // Let's assume safely 0.0 for transcoding stream start.
+    
+    let play_position = if is_transcoding { 0.0 } else { start_time as f32 };
+
+    app.load(media_info, true, play_position).await?;
+    Ok(is_transcoding)
 }
 
 // Simple heuristic to get local IP (for now binds to 0.0.0.0 effectively but proper IP needed for URL)
