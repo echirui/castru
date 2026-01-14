@@ -113,6 +113,8 @@ pub struct MediaStatus {
     #[serde(rename = "supportedMediaCommands")]
     pub supported_media_commands: i32,
     pub volume: Option<Volume>,
+    #[serde(rename = "idleReason")]
+    pub idle_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

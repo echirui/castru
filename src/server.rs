@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 use crate::error::CastError;
 
 /// Simple HTTP Server to stream a specific file.
-pub struct StreamServer {
+    pub struct StreamServer {
     file_path: Arc<Mutex<Option<PathBuf>>>,
+    transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
+    transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
     port: u16,
 }
 
@@ -24,6 +26,8 @@ impl StreamServer {
     pub fn new() -> Self {
         Self {
             file_path: Arc::new(Mutex::new(None)),
+            transcode_rx: Arc::new(tokio::sync::Mutex::new(None)),
+            transcode_process: Arc::new(tokio::sync::Mutex::new(None)),
             port: 0,
         }
     }
@@ -37,6 +41,7 @@ impl StreamServer {
         let addr = listener.local_addr().map_err(CastError::Io)?;
         self.port = addr.port();
         let file_path_clone = self.file_path.clone();
+        let transcode_rx_clone = self.transcode_rx.clone();
 
         println!("Streaming server listening on {}", addr);
 
@@ -44,8 +49,9 @@ impl StreamServer {
             loop {
                 if let Ok((socket, _)) = listener.accept().await {
                     let fp = file_path_clone.clone();
+                    let trx = transcode_rx_clone.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, fp).await {
+                        if let Err(e) = handle_connection(socket, fp, trx).await {
                             eprintln!("Connection handling error: {}", e);
                         }
                     });
@@ -57,19 +63,81 @@ impl StreamServer {
     }
 
     /// Sets the file to be streamed.
-    pub fn set_file(&self, path: PathBuf) {
-        let mut fp = self.file_path.lock().unwrap();
-        *fp = Some(path);
+    /// Sets the file to be streamed.
+    pub async fn set_file(&self, path: PathBuf) {
+        {
+            let mut fp = self.file_path.lock().unwrap();
+            *fp = Some(path);
+        }
+        // Clear transcode if any
+        let mut trx = self.transcode_rx.lock().await;
+        *trx = None;
+        let mut proc = self.transcode_process.lock().await;
+        if let Some(mut child) = proc.take() {
+            let _ = child.start_kill(); 
+        }
+    }
+
+    pub async fn set_transcode_output(&self, pipeline: crate::transcode::TranscodingPipeline) {
+         // Cleanup old
+         {
+             let mut proc = self.transcode_process.lock().await;
+             if let Some(mut child) = proc.take() {
+                 let _ = child.start_kill(); 
+             }
+             *proc = Some(pipeline.process);
+         }
+         
+         let mut trx = self.transcode_rx.lock().await;
+         *trx = Some(pipeline.stdout);
     }
 }
 
-async fn handle_connection(mut socket: TcpStream, file_path: Arc<Mutex<Option<PathBuf>>>) -> std::io::Result<()> {
+async fn handle_connection(
+    mut socket: TcpStream, 
+    file_path: Arc<Mutex<Option<PathBuf>>>,
+    transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>
+) -> std::io::Result<()> {
     let mut buf = [0; 1024];
     let n = socket.read(&mut buf).await?;
     if n == 0 { return Ok(()); }
 
     let request = String::from_utf8_lossy(&buf[..n]);
     
+    // Check transcode first
+    {
+        let mut trx = transcode_rx.lock().await;
+        if let Some(stdout) = trx.as_mut() {
+             // Serve from stdout
+             let status_line = "HTTP/1.1 200 OK";
+             let header = format!(
+                "{}\r\n\
+                Content-Type: video/mp4\r\n\
+                Connection: keep-alive\r\n\
+                Transfer-Encoding: chunked\r\n\
+                \r\n",
+                status_line
+            );
+            socket.write_all(header.as_bytes()).await?;
+            
+            // Pipe stdout to socket with chunked encoding
+            let mut pipe_buf = [0u8; 8192];
+            loop {
+                let n = stdout.read(&mut pipe_buf).await?;
+                if n == 0 {
+                    socket.write_all(b"0\r\n\r\n").await?;
+                    break;
+                }
+                
+                let size_str = format!("{:X}\r\n", n);
+                socket.write_all(size_str.as_bytes()).await?;
+                socket.write_all(&pipe_buf[..n]).await?;
+                socket.write_all(b"\r\n").await?;
+            }
+            return Ok(());
+        }
+    }
+
     // Extract Range header
     let range_header = request.lines()
         .find(|line| line.starts_with("Range: bytes="))
