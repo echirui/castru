@@ -17,6 +17,15 @@ use std::collections::VecDeque;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
+
+    // Panic hook for TUI cleanup using crossterm
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Try to restore terminal
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen, crossterm::cursor::Show);
+        default_hook(info);
+    }));
     
     if args.len() < 2 {
         print_usage();
@@ -267,6 +276,18 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
             Some(cmd) = tui_rx.recv() => {
                 match cmd {
                     TuiCommand::Quit => break,
+                    TuiCommand::TogglePlay => {
+                        match current_status {
+                            PlaybackStatus::Playing | PlaybackStatus::Buffering => {
+                                let _ = app.pause(1).await;
+                                current_status = PlaybackStatus::Paused;
+                            },
+                            _ => {
+                                let _ = app.play(1).await;
+                                current_status = PlaybackStatus::Playing;
+                            }
+                        }
+                    },
                     TuiCommand::Pause => {
                         let _ = app.pause(1).await;
                         // Optimistic update

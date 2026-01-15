@@ -8,6 +8,7 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - Rust 2021 + `tokio`, `prost`, `rustls`, `mdns-sd`, `crossterm`. (004-castnow-features)
 - N/A (Memory-based pipeline) (005-remote-transcoding)
 - Rust 2021 + `tokio` (full), `crossterm` (existing), `mdns-sd`. (006-castnow-tui)
+- Rust 2021 Edition + `crossterm` (existing) (007-visual-tui)
 
 - (001-castv2-protocol)
 
@@ -28,9 +29,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
+- 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
 - 006-castnow-tui: Added Rust 2021 + `tokio` (full), `crossterm` (existing), `mdns-sd`.
-- 005-remote-transcoding: Added Rust 2021
-- 004-castnow-features: Added Rust 2021 + `tokio`, `prost`, `rustls`, `mdns-sd`, `crossterm`.
 
 
 <!-- MANUAL ADDITIONS START -->

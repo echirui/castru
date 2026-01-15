@@ -9,4 +9,4 @@ release/
 .idea/
 *.log
 .env*
-proto/output.mp4
+output.mp4
