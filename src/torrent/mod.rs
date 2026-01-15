@@ -1,4 +1,6 @@
+use librqbit::ManagedTorrent;
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -28,7 +30,9 @@ impl Default for TorrentConfig {
 #[derive(Debug, Clone)]
 pub enum TorrentState {
     Resolving,
-    Buffering,
+    DownloadingMetadata,
+    Buffering { progress: f32 },
+    ReadyToPlay,
     Playing,
     Finished,
 }
@@ -39,6 +43,15 @@ pub struct TorrentSession {
     pub save_path: PathBuf,
     pub target_file_index: usize,
     pub state: TorrentState,
+}
+
+pub struct TorrentStreamInfo {
+    pub handle: Arc<ManagedTorrent>,
+    pub path: PathBuf,
+    pub total_size: u64,
+    pub file_offset: u64,
+    pub piece_length: u64,
+    pub file_idx: usize,
 }
 
 #[derive(Error, Debug)]

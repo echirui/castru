@@ -3,6 +3,7 @@
 use crate::error::CastError;
 use crate::torrent::stream::GrowingFile;
 use bytes::Bytes;
+use librqbit::ManagedTorrent;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::fs::File;
@@ -32,7 +33,13 @@ impl Default for StreamConfig {
 #[derive(Clone)]
 pub enum StreamSource {
     Static(PathBuf),
-    Growing { path: PathBuf, total_size: u64 },
+    Growing {
+        path: PathBuf,
+        total_size: u64,
+        handle: Arc<ManagedTorrent>,
+        file_offset: u64,
+        piece_length: u64,
+    },
 }
 
 impl StreamSource {
@@ -42,8 +49,21 @@ impl StreamSource {
                 let f = File::open(p).await?;
                 Ok(Box::new(f))
             }
-            StreamSource::Growing { path, total_size } => {
-                let f = GrowingFile::open(path.clone(), *total_size).await?;
+            StreamSource::Growing {
+                path,
+                total_size,
+                handle,
+                file_offset,
+                piece_length,
+            } => {
+                let f = GrowingFile::open(
+                    path.clone(),
+                    *total_size,
+                    handle.clone(),
+                    *file_offset,
+                    *piece_length,
+                )
+                .await?;
                 Ok(Box::new(f))
             }
         }
@@ -58,7 +78,7 @@ impl StreamSource {
 
     pub fn total_size(&self) -> Option<u64> {
         match self {
-            StreamSource::Static(_) => None, // Must read metadata
+            StreamSource::Static(_) => None,
             StreamSource::Growing { total_size, .. } => Some(*total_size),
         }
     }
@@ -206,7 +226,7 @@ async fn handle_connection(
         if let Some(stdout) = trx.as_mut() {
             let status_line = "HTTP/1.1 200 OK";
             let header = format!(
-                "{}\r\n\
+                "{} \r\n\
                 Content-Type: video/mp4\r\n\
                 Connection: keep-alive\r\n\
                 Transfer-Encoding: chunked\r\n\
@@ -256,8 +276,6 @@ async fn handle_connection(
     let file_size = if let Some(s) = source.total_size() {
         s
     } else {
-        // If static, check metadata. But stream is boxed.
-        // We can just check file path metadata
         tokio::fs::metadata(&path).await?.len()
     };
 
@@ -273,7 +291,7 @@ async fn handle_connection(
     };
 
     let header = format!(
-        "{}\r\n\
+        "{} \r\n\
         Content-Type: {}\r\n\
         Content-Length: {}\r\n\
         Content-Range: bytes {}-{}/{}\r\n\
@@ -308,13 +326,12 @@ where
             Ok(_) => {
                 let chunk = Bytes::copy_from_slice(&buffer[..to_read as usize]);
                 if tx.send(Ok(chunk)).await.is_err() {
-                    break; // Receiver dropped
+                    break;
                 }
                 remaining -= to_read;
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    // Should not happen if logic is correct, but break safely
                     break;
                 }
                 let _ = tx.send(Err(e)).await;
@@ -328,7 +345,6 @@ where
 fn parse_range(range: Option<&str>, file_size: u64) -> (u64, u64) {
     if let Some(r) = range {
         if let Some((start_str, end_str)) = r.split_once('-') {
-            // Suffix range: -500 (Last 500 bytes)
             if start_str.is_empty() {
                 if let Ok(suffix) = end_str.parse::<u64>() {
                     return (file_size.saturating_sub(suffix), file_size - 1);
@@ -347,7 +363,6 @@ fn parse_range(range: Option<&str>, file_size: u64) -> (u64, u64) {
     (0, file_size - 1)
 }
 
-/// Helper to guess MIME type from file extension.
 pub fn get_mime_type(path: &Path) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("mp4") | Some("m4v") => "video/mp4",
@@ -386,10 +401,9 @@ mod tests {
     #[test]
     fn test_range_parsing() {
         let size = 1000;
-        // Test assumes input string is already stripped of "Range: bytes=" prefix
         assert_eq!(parse_range(Some("0-499"), size), (0, 499));
         assert_eq!(parse_range(Some("500-"), size), (500, 999));
-        assert_eq!(parse_range(Some("-500"), size), (500, 999)); // Last 500 bytes
+        assert_eq!(parse_range(Some("-500"), size), (500, 999));
         assert_eq!(parse_range(None, size), (0, 999));
     }
 
@@ -403,9 +417,7 @@ mod tests {
         let total_len = data.len() as u64;
 
         tokio::spawn(async move {
-            producer_task(cursor, tx, chunk_size, total_len)
-                .await
-                .unwrap();
+            let _ = producer_task(cursor, tx, chunk_size, total_len).await;
         });
 
         let mut received_data = Vec::new();
@@ -419,7 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_producer_task_partial_read() {
-        let data = vec![1u8, 2, 3, 4, 5]; // 5 bytes
+        let data = vec![1u8, 2, 3, 4, 5];
         let cursor = std::io::Cursor::new(data.clone());
         let (tx, mut rx) = mpsc::channel(10);
 
@@ -427,9 +439,7 @@ mod tests {
         let total_len = data.len() as u64;
 
         tokio::spawn(async move {
-            producer_task(cursor, tx, chunk_size, total_len)
-                .await
-                .unwrap();
+            let _ = producer_task(cursor, tx, chunk_size, total_len).await;
         });
 
         let mut received_data = Vec::new();
