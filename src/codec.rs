@@ -1,5 +1,5 @@
-use crate::proto::CastMessage;
 use crate::error::CastError;
+use crate::proto::CastMessage;
 use bytes::{Buf, BufMut, BytesMut};
 use prost::Message;
 

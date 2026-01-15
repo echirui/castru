@@ -1,6 +1,6 @@
-use castru::{CastClient};
 use castru::controllers::default_media_receiver::DefaultMediaReceiver;
 use castru::protocol::media::MediaInformation;
+use castru::CastClient;
 use std::error::Error;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -19,14 +19,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // client.connect_receiver().await?; // Connect receiver is handled inside launch mostly, but the initial connection is needed.
     // Actually CastClient::connect establishes TLS.
     // connect_receiver handles CONNECT to "receiver-0"
-    
+
     // We should probably ensure the client is fully ready.
     client.connect_receiver().await?;
 
     println!("Connected to Cast device at {}.", ip);
 
     let mut app = DefaultMediaReceiver::new(&client);
-    
+
     println!("Launching Default Media Receiver...");
     app.launch().await?;
     println!("App launched and connected!");
@@ -49,19 +49,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Err(e) = app.pause(1).await {
         println!("Failed to pause (might be wrong session ID): {}", e);
     }
-    
+
     sleep(Duration::from_secs(3)).await;
 
     println!("Resuming...");
     if let Err(e) = app.play(1).await {
-         println!("Failed to play: {}", e);
+        println!("Failed to play: {}", e);
     }
 
     sleep(Duration::from_secs(5)).await;
 
     println!("Stopping...");
     if let Err(e) = app.stop(1).await {
-         println!("Failed to stop: {}", e);
+        println!("Failed to stop: {}", e);
     }
 
     Ok(())

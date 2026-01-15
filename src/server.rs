@@ -1,15 +1,14 @@
-
 //! HTTP Server for streaming local content to Cast devices.
 
-use std::path::{Path, PathBuf};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt, SeekFrom};
-use tokio::fs::File;
-use std::sync::{Arc, Mutex};
 use crate::error::CastError;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::net::{TcpListener, TcpStream};
 
 /// Simple HTTP Server to stream a specific file.
-    pub struct StreamServer {
+pub struct StreamServer {
     file_path: Arc<Mutex<Option<PathBuf>>>,
     transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
     transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
@@ -35,9 +34,10 @@ impl StreamServer {
     /// Starts the HTTP server on an available port.
     /// Returns the local IP address and port where the content is served.
     pub async fn start(&mut self, local_ip: &str) -> Result<String, CastError> {
-        let listener = TcpListener::bind(format!("{}:0", local_ip)).await
+        let listener = TcpListener::bind(format!("{}:0", local_ip))
+            .await
             .map_err(CastError::Io)?;
-        
+
         let addr = listener.local_addr().map_err(CastError::Io)?;
         self.port = addr.port();
         let file_path_clone = self.file_path.clone();
@@ -74,43 +74,45 @@ impl StreamServer {
         *trx = None;
         let mut proc = self.transcode_process.lock().await;
         if let Some(mut child) = proc.take() {
-            let _ = child.start_kill(); 
+            let _ = child.start_kill();
         }
     }
 
     pub async fn set_transcode_output(&self, pipeline: crate::transcode::TranscodingPipeline) {
-         // Cleanup old
-         {
-             let mut proc = self.transcode_process.lock().await;
-             if let Some(mut child) = proc.take() {
-                 let _ = child.start_kill(); 
-             }
-             *proc = Some(pipeline.process);
-         }
-         
-         let mut trx = self.transcode_rx.lock().await;
-         *trx = Some(pipeline.stdout);
+        // Cleanup old
+        {
+            let mut proc = self.transcode_process.lock().await;
+            if let Some(mut child) = proc.take() {
+                let _ = child.start_kill();
+            }
+            *proc = Some(pipeline.process);
+        }
+
+        let mut trx = self.transcode_rx.lock().await;
+        *trx = Some(pipeline.stdout);
     }
 }
 
 async fn handle_connection(
-    mut socket: TcpStream, 
+    mut socket: TcpStream,
     file_path: Arc<Mutex<Option<PathBuf>>>,
-    transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>
+    transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
 ) -> std::io::Result<()> {
     let mut buf = [0; 1024];
     let n = socket.read(&mut buf).await?;
-    if n == 0 { return Ok(()); }
+    if n == 0 {
+        return Ok(());
+    }
 
     let request = String::from_utf8_lossy(&buf[..n]);
-    
+
     // Check transcode first
     {
         let mut trx = transcode_rx.lock().await;
         if let Some(stdout) = trx.as_mut() {
-             // Serve from stdout
-             let status_line = "HTTP/1.1 200 OK";
-             let header = format!(
+            // Serve from stdout
+            let status_line = "HTTP/1.1 200 OK";
+            let header = format!(
                 "{}\r\n\
                 Content-Type: video/mp4\r\n\
                 Connection: keep-alive\r\n\
@@ -119,7 +121,7 @@ async fn handle_connection(
                 status_line
             );
             socket.write_all(header.as_bytes()).await?;
-            
+
             // Pipe stdout to socket with chunked encoding
             let mut pipe_buf = [0u8; 8192];
             loop {
@@ -128,7 +130,7 @@ async fn handle_connection(
                     socket.write_all(b"0\r\n\r\n").await?;
                     break;
                 }
-                
+
                 let size_str = format!("{:X}\r\n", n);
                 socket.write_all(size_str.as_bytes()).await?;
                 socket.write_all(&pipe_buf[..n]).await?;
@@ -139,7 +141,8 @@ async fn handle_connection(
     }
 
     // Extract Range header
-    let range_header = request.lines()
+    let range_header = request
+        .lines()
         .find(|line| line.starts_with("Range: bytes="))
         .map(|line| line.trim_start_matches("Range: bytes=").trim());
 
@@ -162,8 +165,12 @@ async fn handle_connection(
 
     file.seek(SeekFrom::Start(start)).await?;
 
-    let status_line = if range_header.is_some() { "HTTP/1.1 206 Partial Content" } else { "HTTP/1.1 200 OK" };
-    
+    let status_line = if range_header.is_some() {
+        "HTTP/1.1 206 Partial Content"
+    } else {
+        "HTTP/1.1 200 OK"
+    };
+
     let header = format!(
         "{}\r\n\
         Content-Type: {}\r\n\
@@ -184,8 +191,10 @@ async fn handle_connection(
     while remaining > 0 {
         let to_read = std::cmp::min(buffer.len() as u64, remaining);
         let n = file.read(&mut buffer[..to_read as usize]).await?;
-        if n == 0 { break; }
-        
+        if n == 0 {
+            break;
+        }
+
         socket.write_all(&buffer[..n]).await?;
         remaining -= n as u64;
     }
@@ -245,7 +254,10 @@ mod tests {
         assert_eq!(get_mime_type(Path::new("video.mp4")), "video/mp4");
         assert_eq!(get_mime_type(Path::new("song.mp3")), "audio/mpeg");
         assert_eq!(get_mime_type(Path::new("image.jpg")), "image/jpeg");
-        assert_eq!(get_mime_type(Path::new("unknown.xyz")), "application/octet-stream");
+        assert_eq!(
+            get_mime_type(Path::new("unknown.xyz")),
+            "application/octet-stream"
+        );
     }
 
     #[test]

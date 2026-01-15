@@ -1,14 +1,14 @@
 use crate::client::CastClient;
-use crate::controllers::receiver::ReceiverController;
 use crate::controllers::media::MediaController;
+use crate::controllers::receiver::ReceiverController;
 use crate::error::CastError;
-use crate::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
 use crate::protocol::media::MediaInformation;
+use crate::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
 
 const DEFAULT_MEDIA_RECEIVER_ID: &str = "CC1AD845";
 
 /// A high-level wrapper for the Default Media Receiver application.
-/// 
+///
 /// This struct simplifies the process of launching the Default Media Receiver,
 /// connecting to it, and loading media.
 pub struct DefaultMediaReceiver {
@@ -38,7 +38,7 @@ impl DefaultMediaReceiver {
     /// 4. Initialize the internal MediaController.
     pub async fn launch(&mut self) -> Result<(), CastError> {
         let mut rx = self.client.events();
-        
+
         self.receiver_controller.launch_app(&self.app_id).await?;
 
         // Wait for the application to be ready
@@ -54,7 +54,7 @@ impl DefaultMediaReceiver {
                             if let Some(app) = status.applications.iter().find(|a| a.app_id == self.app_id) {
                                 // App is running, connect to it
                                 self.receiver_controller.join_session(&app.transport_id).await?;
-                                
+
                                 // Initialize MediaController
                                 self.media_controller = Some(MediaController::new(&self.client, &app.transport_id));
                                 return Ok(());
@@ -75,11 +75,18 @@ impl DefaultMediaReceiver {
     }
 
     /// Loads media content into the receiver.
-    pub async fn load(&self, media: MediaInformation, autoplay: bool, current_time: f32) -> Result<(), CastError> {
+    pub async fn load(
+        &self,
+        media: MediaInformation,
+        autoplay: bool,
+        current_time: f32,
+    ) -> Result<(), CastError> {
         if let Some(controller) = &self.media_controller {
             controller.load(media, autoplay, current_time).await
         } else {
-            Err(CastError::Protocol("MediaController not initialized. Call launch() first.".into()))
+            Err(CastError::Protocol(
+                "MediaController not initialized. Call launch() first.".into(),
+            ))
         }
     }
 
@@ -88,7 +95,9 @@ impl DefaultMediaReceiver {
         if let Some(controller) = &self.media_controller {
             controller.play(media_session_id).await
         } else {
-             Err(CastError::Protocol("MediaController not initialized. Call launch() first.".into()))
+            Err(CastError::Protocol(
+                "MediaController not initialized. Call launch() first.".into(),
+            ))
         }
     }
 
@@ -97,16 +106,20 @@ impl DefaultMediaReceiver {
         if let Some(controller) = &self.media_controller {
             controller.pause(media_session_id).await
         } else {
-             Err(CastError::Protocol("MediaController not initialized. Call launch() first.".into()))
+            Err(CastError::Protocol(
+                "MediaController not initialized. Call launch() first.".into(),
+            ))
         }
     }
-    
+
     /// Stops the media playback.
     pub async fn stop(&self, media_session_id: i32) -> Result<(), CastError> {
         if let Some(controller) = &self.media_controller {
             controller.stop(media_session_id).await
         } else {
-             Err(CastError::Protocol("MediaController not initialized. Call launch() first.".into()))
+            Err(CastError::Protocol(
+                "MediaController not initialized. Call launch() first.".into(),
+            ))
         }
     }
 
@@ -115,7 +128,9 @@ impl DefaultMediaReceiver {
         if let Some(controller) = &self.media_controller {
             controller.seek(media_session_id, time).await
         } else {
-             Err(CastError::Protocol("MediaController not initialized. Call launch() first.".into()))
+            Err(CastError::Protocol(
+                "MediaController not initialized. Call launch() first.".into(),
+            ))
         }
     }
 }

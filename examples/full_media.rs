@@ -1,6 +1,6 @@
-use castru::{CastClient, CastError};
 use castru::controllers::media::MediaController;
 use castru::protocol::media::MediaInformation;
+use castru::{CastClient, CastError};
 use std::error::Error;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // This example is simplified; in reality we'd parse events.
     // Assuming we found it:
     let transport_id = "web-1"; // Placeholder
-    
+
     let media_ctrl = MediaController::new(&client, transport_id);
 
     let media_info = MediaInformation {

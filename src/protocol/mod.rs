@@ -1,4 +1,4 @@
-pub mod heartbeat;
 pub mod connection;
-pub mod receiver;
+pub mod heartbeat;
 pub mod media;
+pub mod receiver;

@@ -1,18 +1,18 @@
-use castru::{CastClient, discover_devices_async};
-use castru::server::{StreamServer, get_mime_type};
 use castru::controllers::default_media_receiver::DefaultMediaReceiver;
-use castru::controllers::tui::{TuiController, TuiCommand};
-use castru::controllers::media::{PlaybackStatus, MediaSource}; 
+use castru::controllers::media::{MediaSource, PlaybackStatus};
 use castru::controllers::receiver::ReceiverController; // Added import
-use castru::protocol::media::MediaInformation;
+use castru::controllers::tui::{TuiCommand, TuiController};
 use castru::discovery::CastDevice;
+use castru::protocol::media::MediaInformation;
+use castru::server::{get_mime_type, StreamServer};
+use castru::{discover_devices_async, CastClient};
 
+use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
-use std::time::Duration;
-use std::path::Path;
 use std::net::IpAddr;
-use std::collections::VecDeque;
+use std::path::Path;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -23,10 +23,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     std::panic::set_hook(Box::new(move |info| {
         // Try to restore terminal
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen, crossterm::cursor::Show);
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
         default_hook(info);
     }));
-    
+
     if args.len() < 2 {
         print_usage();
         return Ok(());
@@ -39,17 +43,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             scan_devices().await?;
         }
         "cast" => {
-             if args.len() < 3 {
+            if args.len() < 3 {
                 println!("Usage: castru cast [OPTIONS] <FILE_OR_URL> [FILE_OR_URL...]");
                 println!("Options:");
                 println!("  --ip <IP>      Connect to specific IP");
                 println!("  --name <NAME>  Connect to device with specific Friendly Name");
                 return Ok(());
             }
-            
+
             let cast_args = &args[2..];
             let opts = parse_cast_args(cast_args);
-            
+
             cast_media_playlist(opts).await?;
         }
         "launch" => {
@@ -95,20 +99,20 @@ fn parse_cast_args(args: &[String]) -> CastOptions {
     let mut target_ip = None;
     let mut target_name = None;
     let mut inputs = Vec::new();
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--ip" => {
                 if i + 1 < args.len() {
-                   target_ip = Some(args[i+1].clone());
-                   i += 1; 
+                    target_ip = Some(args[i + 1].clone());
+                    i += 1;
                 }
             }
             "--name" => {
                 if i + 1 < args.len() {
-                   target_name = Some(args[i+1].clone());
-                   i += 1;
+                    target_name = Some(args[i + 1].clone());
+                    i += 1;
                 }
             }
             val => {
@@ -117,14 +121,18 @@ fn parse_cast_args(args: &[String]) -> CastOptions {
         }
         i += 1;
     }
-    
-    CastOptions { target_ip, target_name, inputs }
+
+    CastOptions {
+        target_ip,
+        target_name,
+        inputs,
+    }
 }
 
 async fn scan_devices() -> Result<(), Box<dyn Error>> {
     println!("Scanning for Google Cast devices (will run for 10s)...");
     let mut rx = discover_devices_async()?;
-    
+
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
 
@@ -151,12 +159,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     // 0. Prepare Playlist
     let mut playlist = VecDeque::new();
     for input in opts.inputs {
-         let path = Path::new(&input);
-         if path.exists() {
-             playlist.push_back(MediaSource::FilePath(input));
-         } else {
-             playlist.push_back(MediaSource::Url(input));
-         }
+        let path = Path::new(&input);
+        if path.exists() {
+            playlist.push_back(MediaSource::FilePath(input));
+        } else {
+            playlist.push_back(MediaSource::Url(input));
+        }
     }
 
     if playlist.is_empty() {
@@ -173,20 +181,20 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     let device = if let Some(ip_str) = opts.target_ip {
         println!("Targeting specific IP: {}", ip_str);
         CastDevice {
-             ip: ip_str.parse().map_err(|_| "Invalid IP address provided")?,
-             port: 8009,
-             friendly_name: "Direct Connect".to_string(),
-             model_name: "Unknown".to_string(),
-             uuid: "Unknown".to_string(),
+            ip: ip_str.parse().map_err(|_| "Invalid IP address provided")?,
+            port: 8009,
+            friendly_name: "Direct Connect".to_string(),
+            model_name: "Unknown".to_string(),
+            uuid: "Unknown".to_string(),
         }
     } else {
         println!("Searching for Cast devices...");
         let mut rx = discover_devices_async()?;
         let matching_device;
-        
+
         let timeout = tokio::time::sleep(Duration::from_secs(10));
         tokio::pin!(timeout);
-        
+
         loop {
             tokio::select! {
                 Some(d) = rx.recv() => {
@@ -227,10 +235,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     // 4. Start TUI
     let tui = TuiController::new();
     let mut tui_rx = tui.start()?;
-    
+
     // TUI Loop
-    let mut current_status = PlaybackStatus::Idle; 
-    
+    let mut current_status = PlaybackStatus::Idle;
+
     struct AppState {
         is_transcoding: bool,
         current_time: f64,
@@ -246,10 +254,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         animation_frame: usize,
         media_session_id: Option<i32>,
     }
-    
-    let mut app_state = AppState { 
-        is_transcoding: false, 
-        current_time: 0.0, 
+
+    let mut app_state = AppState {
+        is_transcoding: false,
+        current_time: 0.0,
         total_duration: None,
         volume_level: Some(1.0),
         is_muted: false,
@@ -268,21 +276,21 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         app_state.source = Some(source.clone());
         match load_media(&app, &server, source, &server_url_base, 0.0).await {
             Ok((is_tx, probe)) => {
-                 app_state.is_transcoding = is_tx;
-                 app_state.current_time = 0.0;
-                 app_state.total_duration = probe.duration;
-                 app_state.video_codec = probe.video_codec;
-                 app_state.audio_codec = probe.audio_codec;
-            },
+                app_state.is_transcoding = is_tx;
+                app_state.current_time = 0.0;
+                app_state.total_duration = probe.duration;
+                app_state.video_codec = probe.video_codec;
+                app_state.audio_codec = probe.audio_codec;
+            }
             Err(e) => eprintln!("Failed to load media: {}", e),
         }
     }
-    
+
     // Event Loop
     let mut events = client.events();
+    use castru::controllers::tui::TuiState;
     use castru::protocol::media::{MediaResponse, NAMESPACE as MEDIA_NAMESPACE};
-    use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
-    use castru::controllers::tui::TuiState; // Import TuiState
+    use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE}; // Import TuiState
 
     let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
 
@@ -327,7 +335,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                  app_state.audio_codec = probe.audio_codec;
                             }
                          } else {
-                             app_state.current_media_idx -= 1; 
+                             app_state.current_media_idx -= 1;
                          }
                     },
                     TuiCommand::Previous => {
@@ -359,7 +367,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                              }
                          } else {
                              let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
-                             app_state.current_time = new_time; 
+                             app_state.current_time = new_time;
                          }
                     },
                     TuiCommand::SeekBackward(s) => {
@@ -376,7 +384,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                              }
                          } else {
                              let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
-                             app_state.current_time = new_time; 
+                             app_state.current_time = new_time;
                          }
                     },
                     TuiCommand::VolumeUp => {
@@ -396,7 +404,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     },
                     _ => {}
                 }
-                
+
                 // Update TUI
                 let tui_state = TuiState {
                     status: format!("{:?}", current_status),
@@ -424,7 +432,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                       app_state.is_muted = muted;
                                   }
                               }
-                              
+
                               match s.player_state.as_str() {
                                   "PLAYING" => current_status = PlaybackStatus::Playing,
                                   "PAUSED" => current_status = PlaybackStatus::Paused,
@@ -447,10 +455,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                   },
                                   _ => {}
                               }
-                              
+
                               // Extract duration from media info if available (usually in MEDIA_STATUS `media` field, but simpler to just track what we can or rely on what we probe)
                               // If we have local probe result, we should store it in AppState
-                              
+
                               let tui_state = TuiState {
                                     status: format!("{:?}", current_status),
                                     current_time: app_state.current_time as f32,
@@ -517,54 +525,80 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-use castru::transcode::{probe_media, needs_transcoding, spawn_ffmpeg, TranscodeConfig, MediaProbeResult};
-
+use castru::transcode::{
+    needs_transcoding, probe_media, spawn_ffmpeg, MediaProbeResult, TranscodeConfig,
+};
 
 async fn load_media(
-    app: &DefaultMediaReceiver, 
-    server: &StreamServer, 
-    source: &MediaSource, 
+    app: &DefaultMediaReceiver,
+    server: &StreamServer,
+    source: &MediaSource,
     server_base: &str,
-    start_time: f64
+    start_time: f64,
 ) -> Result<(bool, MediaProbeResult), Box<dyn Error>> {
-     let (url, content_type, is_transcoding, probe) = match source {
+    let (url, content_type, is_transcoding, probe) = match source {
         MediaSource::FilePath(path_str) => {
             let path = Path::new(path_str);
-            
+
             // Probe media
             let probe = match probe_media(path).await {
                 Ok(p) => p,
                 Err(e) => {
-                     eprintln!("Warning: Probe failed: {}, assuming supported.", e);
-                     MediaProbeResult { video_codec: None, audio_codec: None, duration: None, video_profile: None, pix_fmt: None }
+                    eprintln!("Warning: Probe failed: {}, assuming supported.", e);
+                    MediaProbeResult {
+                        video_codec: None,
+                        audio_codec: None,
+                        duration: None,
+                        video_profile: None,
+                        pix_fmt: None,
+                    }
                 }
             };
 
             if needs_transcoding(&probe) {
-                 println!("Transcoding needed (Video: {:?}, Audio: {:?})", probe.video_codec, probe.audio_codec);
-                 let config = TranscodeConfig {
-                     input_path: path.to_path_buf(),
-                     start_time, // Use provided start_time
-                     target_video_codec: "libx264".to_string(),
-                     target_audio_codec: "aac".to_string(),
-                 };
-                 
-                 let pipeline = spawn_ffmpeg(&config)?;
-                 server.set_transcode_output(pipeline).await;
-                 
-                 (server_base.to_string(), "video/mp4".to_string(), true, probe)
+                println!(
+                    "Transcoding needed (Video: {:?}, Audio: {:?})",
+                    probe.video_codec, probe.audio_codec
+                );
+                let config = TranscodeConfig {
+                    input_path: path.to_path_buf(),
+                    start_time, // Use provided start_time
+                    target_video_codec: "libx264".to_string(),
+                    target_audio_codec: "aac".to_string(),
+                };
+
+                let pipeline = spawn_ffmpeg(&config)?;
+                server.set_transcode_output(pipeline).await;
+
+                (
+                    server_base.to_string(),
+                    "video/mp4".to_string(),
+                    true,
+                    probe,
+                )
             } else {
                 server.set_file(path.to_path_buf()).await;
-                (server_base.to_string(), get_mime_type(path).to_string(), false, probe)
+                (
+                    server_base.to_string(),
+                    get_mime_type(path).to_string(),
+                    false,
+                    probe,
+                )
             }
-        },
+        }
         MediaSource::Url(u) => (
-             u.clone(), 
-             "video/mp4".to_string(), 
-             false, 
-             MediaProbeResult { video_codec: None, audio_codec: None, duration: None, video_profile: None, pix_fmt: None }
+            u.clone(),
+            "video/mp4".to_string(),
+            false,
+            MediaProbeResult {
+                video_codec: None,
+                audio_codec: None,
+                duration: None,
+                video_profile: None,
+                pix_fmt: None,
+            },
         ),
-     };
+    };
 
     let media_info = MediaInformation {
         content_id: url,
@@ -572,8 +606,12 @@ async fn load_media(
         content_type,
         metadata: None,
     };
-    
-    let play_position = if is_transcoding { 0.0 } else { start_time as f32 };
+
+    let play_position = if is_transcoding {
+        0.0
+    } else {
+        start_time as f32
+    };
 
     app.load(media_info, true, play_position).await?;
     Ok((is_transcoding, probe))
@@ -595,7 +633,7 @@ async fn connect_only(ip: &str) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {}...", ip);
     let client = CastClient::connect(ip, 8009).await?;
     println!("Connected! Waiting for events (Ctrl+C to exit)...");
-    
+
     let mut rx = client.events();
     while let Ok(event) = rx.recv().await {
         println!("[{}] {}", event.namespace, event.payload);
@@ -606,7 +644,7 @@ async fn connect_only(ip: &str) -> Result<(), Box<dyn Error>> {
 async fn launch_app(ip: &str, app_id: &str) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {}...", ip);
     let client = CastClient::connect(ip, 8009).await?;
-    
+
     println!("Connecting to receiver...");
     client.connect_receiver().await?;
 

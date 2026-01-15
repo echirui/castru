@@ -1,18 +1,18 @@
+use crate::codec::CastCodec;
 use crate::error::CastError;
 use crate::proto::CastMessage;
-use crate::codec::CastCodec;
-use crate::tls::create_tls_connector;
-use crate::protocol::heartbeat::{self, Heartbeat};
 use crate::protocol::connection::{self, Connection};
-use crate::protocol::receiver::{self, ReceiverRequest, Volume};
+use crate::protocol::heartbeat::{self, Heartbeat};
 use crate::protocol::media::{self, MediaRequest};
-use rustls::ServerName;
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, broadcast};
-use tokio::time::{self, Duration};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::protocol::receiver::{self, ReceiverRequest, Volume};
+use crate::tls::create_tls_connector;
 use bytes::BytesMut;
+use rustls::ServerName;
 use std::convert::TryFrom;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::{broadcast, mpsc};
+use tokio::time::{self, Duration};
 
 /// Event received from the Cast device
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub struct CastEvent {
 }
 
 /// A client for communicating with a Google Cast device.
-/// 
+///
 /// Handles TLS connection, message framing, heartbeats, and event dispatching.
 #[derive(Clone)]
 pub struct CastClient {
@@ -30,8 +30,8 @@ pub struct CastClient {
     event_tx: broadcast::Sender<CastEvent>,
 }
 
-use crate::controllers::receiver::ReceiverController;
 use crate::controllers::media::MediaController;
+use crate::controllers::receiver::ReceiverController;
 
 impl CastClient {
     pub fn receiver(&self) -> ReceiverController {
@@ -49,18 +49,18 @@ impl CastClient {
         let (command_tx, mut command_rx) = mpsc::channel::<CastMessage>(32);
         let (event_tx, _) = broadcast::channel::<CastEvent>(32);
         let event_tx_clone = event_tx.clone();
-        
+
         let host_owned = host.to_string();
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(5));
             let mut retry_delay = Duration::from_secs(1);
-            
+
             loop {
                 // Connection attempt loop
                 let addr = format!("{}:{}", host_owned, port);
                 let tcp_stream_res = TcpStream::connect(&addr).await;
-                
+
                 if let Err(e) = tcp_stream_res {
                     eprintln!("Connection failed: {}. Retrying in {:?}...", e, retry_delay);
                     time::sleep(retry_delay).await;
@@ -78,7 +78,10 @@ impl CastClient {
 
                 let stream_res = connector.connect(domain, tcp_stream).await;
                 if let Err(e) = stream_res {
-                    eprintln!("TLS Handshake failed: {}. Retrying in {:?}...", e, retry_delay);
+                    eprintln!(
+                        "TLS Handshake failed: {}. Retrying in {:?}...",
+                        e, retry_delay
+                    );
                     time::sleep(retry_delay).await;
                     retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(30));
                     continue;
@@ -86,7 +89,7 @@ impl CastClient {
                 let stream = stream_res.unwrap();
                 let (mut reader, mut writer) = tokio::io::split(stream);
                 let mut buf = BytesMut::with_capacity(1024);
-                
+
                 println!("Connected to {}", host_owned);
                 retry_delay = Duration::from_secs(1); // Reset on success
 
@@ -105,7 +108,7 @@ impl CastClient {
                                 payload_utf8: Some(payload),
                                 payload_binary: None,
                             };
-                            
+
                             let mut encode_buf = BytesMut::new();
                             if CastCodec::encode(&msg, &mut encode_buf).is_ok() {
                                  if let Err(_e) = writer.write_all(&encode_buf).await {
@@ -153,17 +156,23 @@ impl CastClient {
             }
         });
 
-        Ok(Self { command_tx, event_tx })
+        Ok(Self {
+            command_tx,
+            event_tx,
+        })
     }
 
     pub async fn send_message(&self, msg: CastMessage) -> Result<(), CastError> {
-        self.command_tx.send(msg).await.map_err(|_| CastError::Protocol("Channel closed".into()))
+        self.command_tx
+            .send(msg)
+            .await
+            .map_err(|_| CastError::Protocol("Channel closed".into()))
     }
 
     pub async fn connect_receiver(&self) -> Result<(), CastError> {
         let msg = Connection::Connect;
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
@@ -183,7 +192,7 @@ impl CastClient {
             request_id,
         };
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
@@ -196,7 +205,12 @@ impl CastClient {
         self.send_message(cast_msg).await
     }
 
-    pub async fn media_seek(&self, destination_id: &str, media_session_id: i32, time: f32) -> Result<(), CastError> {
+    pub async fn media_seek(
+        &self,
+        destination_id: &str,
+        media_session_id: i32,
+        time: f32,
+    ) -> Result<(), CastError> {
         let request_id = 1; // TODO: Manage request IDs dynamically
         let msg = MediaRequest::Seek {
             request_id,
@@ -205,7 +219,7 @@ impl CastClient {
             resume_state: None,
         };
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
@@ -218,14 +232,18 @@ impl CastClient {
         self.send_message(cast_msg).await
     }
 
-    pub async fn media_get_status(&self, destination_id: &str, media_session_id: Option<i32>) -> Result<(), CastError> {
+    pub async fn media_get_status(
+        &self,
+        destination_id: &str,
+        media_session_id: Option<i32>,
+    ) -> Result<(), CastError> {
         let request_id = 1; // TODO: Manage request IDs dynamically
         let msg = MediaRequest::GetStatus {
             request_id,
             media_session_id,
         };
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
@@ -248,7 +266,7 @@ impl CastClient {
             },
         };
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
