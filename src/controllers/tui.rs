@@ -459,8 +459,8 @@ fn render_projector_frame(frame: usize, _width: usize, height: usize) -> Vec<Str
     // Create full size buffer
     let mut buffer = Vec::with_capacity(height);
 
-    // Center calculation
-    let start_y = (height.saturating_sub(art_h)) / 2;
+    // Higher than center calculation
+    let start_y = (height.saturating_sub(art_h)) / 4;
 
     for y in 0..height {
         if y >= start_y && y < start_y + art_h {
