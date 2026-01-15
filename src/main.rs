@@ -251,10 +251,14 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     // TUI Loop
     let mut current_status = PlaybackStatus::Idle;
 
+    const WATCHDOG_TIMEOUT_SEC: u64 = 5;
+
     struct AppState {
         is_transcoding: bool,
         seek_offset: f64,
         current_time: f64,
+        last_known_time: f64,
+        last_update_instant: std::time::Instant,
         total_duration: Option<f64>,
         volume_level: Option<f32>,
         is_muted: bool,
@@ -271,6 +275,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         is_transcoding: false,
         seek_offset: 0.0,
         current_time: 0.0,
+        last_known_time: 0.0,
+        last_update_instant: std::time::Instant::now(),
         total_duration: None,
         volume_level: Some(1.0),
         is_muted: false,
@@ -301,6 +307,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                 app_state.is_transcoding = is_tx;
                 app_state.seek_offset = offset;
                 app_state.current_time = offset;
+                app_state.last_known_time = offset;
+                app_state.last_update_instant = std::time::Instant::now();
                 app_state.total_duration = probe.duration;
                 app_state.video_codec = probe.video_codec;
                 app_state.audio_codec = probe.audio_codec;
@@ -313,9 +321,31 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     let mut events = client.events();
     use castru::controllers::tui::TuiState;
     let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
+    let mut watchdog_interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
+            _ = watchdog_interval.tick() => {
+                // Watchdog: If playing but time hasn't advanced for X seconds, resume.
+                if matches!(current_status, PlaybackStatus::Playing) {
+                    if app_state.last_update_instant.elapsed() > Duration::from_secs(WATCHDOG_TIMEOUT_SEC) {
+                        if let Some(source) = &app_state.source {
+                            match load_media(&app, &server, source, &server_url_base, app_state.current_time, &torrent_manager).await {
+                                Ok((is_tx, probe, offset)) => {
+                                    app_state.is_transcoding = is_tx;
+                                    app_state.seek_offset = offset;
+                                    app_state.last_known_time = app_state.current_time;
+                                    app_state.last_update_instant = std::time::Instant::now();
+                                    app_state.total_duration = probe.duration;
+                                    app_state.video_codec = probe.video_codec;
+                                    app_state.audio_codec = probe.audio_codec;
+                                },
+                                Err(e) => eprintln!("Watchdog resume failed: {}", e),
+                            }
+                        }
+                    }
+                }
+            },
             Some(cmd) = tui_rx.recv() => {
                 match cmd {
                     TuiCommand::Quit => break,
@@ -329,6 +359,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                             _ => {
                                 let _ = app.play(sid).await;
                                 current_status = PlaybackStatus::Playing;
+                                app_state.last_update_instant = std::time::Instant::now();
                             }
                         }
                     },
@@ -341,6 +372,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let sid = app_state.media_session_id.unwrap_or(1);
                          let _ = app.play(sid).await;
                          current_status = PlaybackStatus::Playing;
+                         app_state.last_update_instant = std::time::Instant::now();
                     },
                     TuiCommand::Next => {
                         app_state.current_media_idx += 1;
@@ -350,6 +382,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                  app_state.is_transcoding = is_tx;
                                  app_state.seek_offset = offset;
                                  app_state.current_time = offset;
+                                 app_state.last_known_time = offset;
+                                 app_state.last_update_instant = std::time::Instant::now();
                                  app_state.total_duration = probe.duration;
                                  app_state.video_codec = probe.video_codec;
                                  app_state.audio_codec = probe.audio_codec;
@@ -367,6 +401,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                      app_state.is_transcoding = is_tx;
                                      app_state.seek_offset = offset;
                                      app_state.current_time = offset;
+                                     app_state.last_known_time = offset;
+                                     app_state.last_update_instant = std::time::Instant::now();
                                      app_state.total_duration = probe.duration;
                                      app_state.video_codec = probe.video_codec;
                                      app_state.audio_codec = probe.audio_codec;
@@ -378,36 +414,50 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = app_state.current_time + s as f64;
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe, offset)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
-                                     app_state.is_transcoding = is_tx;
-                                     app_state.seek_offset = offset;
-                                     app_state.current_time = new_time;
-                                     app_state.total_duration = probe.duration;
-                                     app_state.video_codec = probe.video_codec;
-                                     app_state.audio_codec = probe.audio_codec;
+                                 match load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
+                                     Ok((is_tx, probe, offset)) => {
+                                         app_state.is_transcoding = is_tx;
+                                         app_state.seek_offset = offset;
+                                         app_state.current_time = new_time;
+                                         app_state.last_known_time = new_time;
+                                         app_state.last_update_instant = std::time::Instant::now();
+                                         app_state.total_duration = probe.duration;
+                                         app_state.video_codec = probe.video_codec;
+                                         app_state.audio_codec = probe.audio_codec;
+                                     },
+                                     Err(e) => eprintln!("SeekForward load error: {}", e),
                                  }
                              }
                          } else {
                              let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
                              app_state.current_time = new_time;
+                             app_state.last_known_time = new_time;
+                             app_state.last_update_instant = std::time::Instant::now();
                          }
                     },
                     TuiCommand::SeekBackward(s) => {
                          let new_time = (app_state.current_time - s as f64).max(0.0);
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe, offset)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
-                                     app_state.is_transcoding = is_tx;
-                                     app_state.seek_offset = offset;
-                                     app_state.current_time = new_time;
-                                     app_state.total_duration = probe.duration;
-                                     app_state.video_codec = probe.video_codec;
-                                     app_state.audio_codec = probe.audio_codec;
+                                 match load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
+                                     Ok((is_tx, probe, offset)) => {
+                                         app_state.is_transcoding = is_tx;
+                                         app_state.seek_offset = offset;
+                                         app_state.current_time = new_time;
+                                         app_state.last_known_time = new_time;
+                                         app_state.last_update_instant = std::time::Instant::now();
+                                         app_state.total_duration = probe.duration;
+                                         app_state.video_codec = probe.video_codec;
+                                         app_state.audio_codec = probe.audio_codec;
+                                     },
+                                     Err(e) => eprintln!("SeekBackward load error: {}", e),
                                  }
                              }
                          } else {
                              let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
                              app_state.current_time = new_time;
+                             app_state.last_known_time = new_time;
+                             app_state.last_update_instant = std::time::Instant::now();
                          }
                     },
                     TuiCommand::VolumeUp => {
@@ -452,6 +502,13 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                               } else {
                                   app_state.current_time = reported_time;
                               }
+
+                              // Update watchdog state
+                              if (app_state.current_time - app_state.last_known_time).abs() > 0.1 {
+                                  app_state.last_known_time = app_state.current_time;
+                                  app_state.last_update_instant = std::time::Instant::now();
+                              }
+
                               app_state.media_session_id = Some(s.media_session_id);
                               if let Some(vol) = &s.volume {
                                   app_state.volume_level = vol.level;
@@ -466,7 +523,20 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                   "BUFFERING" => current_status = PlaybackStatus::Buffering,
                                   "IDLE" => {
                                        current_status = PlaybackStatus::Idle;
-                                       if s.idle_reason.as_deref() == Some("FINISHED") {
+                                       if s.idle_reason.as_deref() == Some("ERROR") {
+                                            println!("Watchdog: Detected Error status. Resuming...");
+                                            if let Some(source) = &app_state.source {
+                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, app_state.current_time, &torrent_manager).await {
+                                                     app_state.is_transcoding = is_tx;
+                                                     app_state.seek_offset = offset;
+                                                     app_state.last_known_time = app_state.current_time;
+                                                     app_state.last_update_instant = std::time::Instant::now();
+                                                     app_state.total_duration = probe.duration;
+                                                     app_state.video_codec = probe.video_codec;
+                                                     app_state.audio_codec = probe.audio_codec;
+                                                }
+                                            }
+                                       } else if s.idle_reason.as_deref() == Some("FINISHED") {
                                             app_state.current_media_idx += 1;
                                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                                  app_state.source = Some(source.clone());
@@ -474,6 +544,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                                      app_state.is_transcoding = is_tx;
                                                      app_state.seek_offset = offset;
                                                      app_state.current_time = offset;
+                                                     app_state.last_known_time = offset;
+                                                     app_state.last_update_instant = std::time::Instant::now();
                                                      app_state.total_duration = probe.duration;
                                                      app_state.video_codec = probe.video_codec;
                                                      app_state.audio_codec = probe.audio_codec;
@@ -483,6 +555,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                   },
                                   _ => {}
                               }
+
 
                               let tui_state = TuiState {
                                     status: format!("{:?}", current_status),
@@ -590,7 +663,7 @@ async fn load_media(
                 let pipeline = spawn_ffmpeg(&config)?;
                 server.set_transcode_output(pipeline).await;
                 (
-                    server_base.to_string(),
+                    format!("{}/?t={}", server_base, start_time),
                     "video/mp4".to_string(),
                     true,
                     probe,
