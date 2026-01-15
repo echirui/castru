@@ -30,8 +30,8 @@ tests/
 
 ## Recent Changes
 - 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
+- 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
 - 006-castnow-tui: Added Rust 2021 + `tokio` (full), `crossterm` (existing), `mdns-sd`.
-- 005-remote-transcoding: Added Rust 2021
 
 
 <!-- MANUAL ADDITIONS START -->
