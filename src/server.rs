@@ -29,7 +29,7 @@ impl Default for StreamConfig {
 }
 
 /// Simple HTTP Server to stream a specific file.
-pub struct StreamServer {
+    pub struct StreamServer {
     file_path: Arc<Mutex<Option<PathBuf>>>,
     transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
     transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
