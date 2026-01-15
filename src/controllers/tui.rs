@@ -23,7 +23,17 @@ pub enum TuiCommand {
     SeekBackward(u64), // Seconds
     VolumeUp,
     VolumeDown,
+    ToggleMute,
     Quit,
+}
+
+pub struct TuiState {
+    pub status: String,
+    pub current_time: f32,
+    pub total_duration: Option<f32>,
+    pub volume_level: Option<f32>, // 0.0 to 1.0
+    pub is_muted: bool,
+    pub media_title: Option<String>,
 }
 
 pub struct TuiController;
@@ -55,10 +65,11 @@ impl TuiController {
                              KeyCode::Char(' ') => Some(TuiCommand::Pause),
                              KeyCode::Char('k') => Some(TuiCommand::Pause),
                              KeyCode::Char('q') | KeyCode::Esc => Some(TuiCommand::Quit),
-                             KeyCode::Right => Some(TuiCommand::SeekForward(10)),
-                             KeyCode::Left => Some(TuiCommand::SeekBackward(10)),
+                             KeyCode::Right => Some(TuiCommand::SeekForward(30)),
+                             KeyCode::Left => Some(TuiCommand::SeekBackward(15)),
                              KeyCode::Up => Some(TuiCommand::VolumeUp),
                              KeyCode::Down => Some(TuiCommand::VolumeDown),
+                             KeyCode::Char('m') => Some(TuiCommand::ToggleMute),
                              KeyCode::Char('n') => Some(TuiCommand::Next),
                              KeyCode::Char('p') => Some(TuiCommand::Previous),
                              _ => {
@@ -91,36 +102,54 @@ impl TuiController {
         let _ = execute!(stdout(), Show);
     }
 
-    pub fn draw_status(&self, status_text: &str, current_time: f32, duration: Option<f32>) -> Result<(), CastError> {
+    pub fn draw(&self, state: &TuiState) -> Result<(), CastError> {
         let mut stdout = stdout();
         
         let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
         
-        execute!(stdout, MoveTo(0, 0), Clear(ClearType::CurrentLine)).map_err(|e| CastError::Tui(e.to_string()))?;
-        
-        // Format time
-        let curr_fmt = format_time(current_time);
-        let dur_fmt = if let Some(d) = duration { format_time(d) } else { "--:--".to_string() };
-
-        // Progress Bar
-        let progress_str = if let Some(dur) = duration {
-            if dur > 0.0 {
-                let width = (cols as usize).saturating_sub(40); // Leave space for text
-                let ratio = (current_time / dur).clamp(0.0, 1.0);
-                let filled = (ratio * width as f32) as usize;
-                let empty = width.saturating_sub(filled);
-                format!("[{}{}]", "=".repeat(filled), " ".repeat(empty))
-            } else {
-                "".to_string()
-            }
-        } else {
-            "".to_string()
+        // Prepare Status String
+        let status_color = match state.status.to_uppercase().as_str() {
+            "PLAYING" => Color::Green,
+            "PAUSED" => Color::Yellow,
+            "BUFFERING" => Color::Blue,
+            _ => Color::Grey,
         };
 
+        // Format Time
+        let curr_fmt = format_duration(state.current_time);
+        let dur_fmt = if let Some(d) = state.total_duration { format_duration(d) } else { "--:--".to_string() };
+        
+        // Volume
+        let vol_str = if state.is_muted {
+            "(Muted)".to_string()
+        } else {
+            match state.volume_level {
+                Some(v) => format!("Vol: {:.0}%", v * 100.0),
+                None => "Vol: --%".to_string(),
+            }
+        };
+
+        // Calculate available width for bar
+        // Layout: [STATUS] CURRENT / TOTAL [BAR] VOLUME
+        // Estimate lengths:
+        // [STATUS]: ~10 chars
+        // Time: ~13 chars "00:00 / 00:00"
+        // Volume: ~10 chars
+        // Spacing: ~4 chars
+        // Total static: ~40 chars
+        
+        let static_len = state.status.len() + 2 + curr_fmt.len() + 3 + dur_fmt.len() + 1 + vol_str.len() + 4;
+        let bar_width = (cols as usize).saturating_sub(static_len);
+        
+        let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
+
+        execute!(stdout, MoveTo(0, 0), Clear(ClearType::CurrentLine)).map_err(|e| CastError::Tui(e.to_string()))?;
+        
         execute!(stdout, 
-            SetForegroundColor(Color::Cyan),
-            Print(format!("{} | {} / {} {}", status_text, curr_fmt, dur_fmt, progress_str)),
-            ResetColor
+            SetForegroundColor(status_color),
+            Print(format!("[{}]", state.status)),
+            ResetColor,
+            Print(format!(" {} / {} {} {}", curr_fmt, dur_fmt, progress_bar, vol_str))
         ).map_err(|e| CastError::Tui(e.to_string()))?;
         
         stdout.flush().map_err(CastError::Io)?;
@@ -128,11 +157,42 @@ impl TuiController {
     }
 }
 
-fn format_time(seconds: f32) -> String {
+fn format_duration(seconds: f32) -> String {
+    let seconds = if seconds.is_nan() || seconds < 0.0 { 0.0 } else { seconds };
     let secs = seconds as u64;
-    let m = secs / 60;
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
     let s = secs % 60;
-    format!("{:02}:{:02}", m, s)
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{:02}:{:02}", m, s)
+    }
+}
+
+fn render_progress_bar(current: f32, total: Option<f32>, width: usize) -> String {
+    if width < 2 { return "".to_string(); }
+    let total = match total {
+        Some(t) if t > 0.0 => t,
+        _ => return format!("[{}]", " ".repeat(width - 2)),
+    };
+    
+    let ratio = (current / total).clamp(0.0, 1.0);
+    let bar_len = width - 2;
+    let filled_len = (ratio * bar_len as f32).round() as usize;
+    let empty_len = bar_len.saturating_sub(filled_len);
+    
+    let bar_body = "=".repeat(filled_len);
+    // Add arrow head if not full and not empty
+    let (body, head) = if filled_len > 0 && filled_len < bar_len {
+        (&bar_body[0..bar_body.len()-1], ">")
+    } else if filled_len == bar_len {
+        (bar_body.as_str(), "")
+    } else {
+        ("", "")
+    };
+
+    format!("[{}{}{}]", body, head, " ".repeat(empty_len))
 }
 
 impl Drop for TuiController {
