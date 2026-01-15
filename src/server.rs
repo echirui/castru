@@ -159,11 +159,13 @@ impl StreamServer {
     }
 
     async fn clear_transcode(&self) {
-        let mut trx = self.transcode_rx.lock().await;
-        *trx = None;
+        {
+            let mut trx = self.transcode_rx.lock().await;
+            *trx = None;
+        }
         let mut proc = self.transcode_process.lock().await;
         if let Some(mut child) = proc.take() {
-            let _ = child.start_kill();
+            let _ = child.kill().await;
         }
     }
 
@@ -222,8 +224,12 @@ async fn handle_connection(
 
     // Check transcode first
     {
-        let mut trx = transcode_rx.lock().await;
-        if let Some(stdout) = trx.as_mut() {
+        let has_transcode = {
+            let trx = transcode_rx.lock().await;
+            trx.is_some()
+        };
+
+        if has_transcode {
             let status_line = "HTTP/1.1 200 OK";
             let header = format!(
                 "{} \r\n\
@@ -237,7 +243,15 @@ async fn handle_connection(
 
             let mut pipe_buf = [0u8; 65536];
             loop {
-                let n = stdout.read(&mut pipe_buf).await?;
+                let n = {
+                    let mut trx = transcode_rx.lock().await;
+                    if let Some(stdout) = trx.as_mut() {
+                        stdout.read(&mut pipe_buf).await?
+                    } else {
+                        0 // Force exit if transcode cleared
+                    }
+                };
+
                 if n == 0 {
                     socket.write_all(b"0\r\n\r\n").await?;
                     break;

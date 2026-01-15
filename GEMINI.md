@@ -37,9 +37,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 014-fix-decode-seek-sync: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 - 013-fix-transcode-seek-sync: Added Rust 2021 + `tokio`, `ffmpeg` (external).
 - 012-fix-torrent-playback: Added Rust 2021 + `librqbit` (existing), `tokio`.
-- 011-add-torrent-support: Added Rust 2021 + `librqbit` (for BitTorrent), `tokio` (for async runtime).
 
 
 <!-- MANUAL ADDITIONS START -->
