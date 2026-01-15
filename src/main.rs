@@ -253,6 +253,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     struct AppState {
         is_transcoding: bool,
+        seek_offset: f64,
         current_time: f64,
         total_duration: Option<f64>,
         volume_level: Option<f32>,
@@ -268,6 +269,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     let mut app_state = AppState {
         is_transcoding: false,
+        seek_offset: 0.0,
         current_time: 0.0,
         total_duration: None,
         volume_level: Some(1.0),
@@ -295,9 +297,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         )
         .await
         {
-            Ok((is_tx, probe)) => {
+            Ok((is_tx, probe, offset)) => {
                 app_state.is_transcoding = is_tx;
-                app_state.current_time = 0.0;
+                app_state.seek_offset = offset;
+                app_state.current_time = offset;
                 app_state.total_duration = probe.duration;
                 app_state.video_codec = probe.video_codec;
                 app_state.audio_codec = probe.audio_codec;
@@ -343,9 +346,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                         app_state.current_media_idx += 1;
                          if let Some(source) = playlist.get(app_state.current_media_idx) {
                              app_state.source = Some(source.clone());
-                            if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                            if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                  app_state.is_transcoding = is_tx;
-                                 app_state.current_time = 0.0;
+                                 app_state.seek_offset = offset;
+                                 app_state.current_time = offset;
                                  app_state.total_duration = probe.duration;
                                  app_state.video_codec = probe.video_codec;
                                  app_state.audio_codec = probe.audio_codec;
@@ -359,9 +363,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                             app_state.current_media_idx -= 1;
                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                 app_state.source = Some(source.clone());
-                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
-                                     app_state.current_time = 0.0;
+                                     app_state.seek_offset = offset;
+                                     app_state.current_time = offset;
                                      app_state.total_duration = probe.duration;
                                      app_state.video_codec = probe.video_codec;
                                      app_state.audio_codec = probe.audio_codec;
@@ -373,8 +378,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = app_state.current_time + s as f64;
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
+                                 if let Ok((is_tx, probe, offset)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
+                                     app_state.seek_offset = offset;
                                      app_state.current_time = new_time;
                                      app_state.total_duration = probe.duration;
                                      app_state.video_codec = probe.video_codec;
@@ -390,8 +396,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = (app_state.current_time - s as f64).max(0.0);
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
+                                 if let Ok((is_tx, probe, offset)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
+                                     app_state.seek_offset = offset;
                                      app_state.current_time = new_time;
                                      app_state.total_duration = probe.duration;
                                      app_state.video_codec = probe.video_codec;
@@ -439,7 +446,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                  if event.namespace == MEDIA_NAMESPACE {
                      if let Ok(MediaResponse::MediaStatus { status, .. }) = serde_json::from_str::<MediaResponse>(&event.payload) {
                           if let Some(s) = status.first() {
-                              app_state.current_time = s.current_time as f64;
+                              let reported_time = s.current_time as f64;
+                              if app_state.is_transcoding {
+                                  app_state.current_time = reported_time + app_state.seek_offset;
+                              } else {
+                                  app_state.current_time = reported_time;
+                              }
                               app_state.media_session_id = Some(s.media_session_id);
                               if let Some(vol) = &s.volume {
                                   app_state.volume_level = vol.level;
@@ -458,9 +470,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                             app_state.current_media_idx += 1;
                                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                                  app_state.source = Some(source.clone());
-                                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                                      app_state.is_transcoding = is_tx;
-                                                     app_state.current_time = 0.0;
+                                                     app_state.seek_offset = offset;
+                                                     app_state.current_time = offset;
                                                      app_state.total_duration = probe.duration;
                                                      app_state.video_codec = probe.video_codec;
                                                      app_state.audio_codec = probe.audio_codec;
@@ -547,7 +560,8 @@ async fn load_media(
     server_base: &str,
     start_time: f64,
     torrent_manager: &TorrentManager,
-) -> Result<(bool, MediaProbeResult), Box<dyn Error>> {
+) -> Result<(bool, MediaProbeResult, f64), Box<dyn Error>> {
+    let mut applied_seek_offset = 0.0;
     let (url, content_type, is_transcoding, probe) = match source {
         MediaSource::FilePath(path_str) => {
             let path = Path::new(path_str);
@@ -566,6 +580,7 @@ async fn load_media(
             };
 
             if needs_transcoding(&probe) {
+                applied_seek_offset = start_time;
                 let config = TranscodeConfig {
                     input_path: path.to_path_buf(),
                     start_time,
@@ -612,14 +627,12 @@ async fn load_media(
             println!("Buffering torrent... (Wait for ~3% or 10MB)");
             loop {
                 let stats = info.handle.stats();
-                                 let downloaded = stats.progress_bytes;                let pct = if info.total_size > 0 {
+                let downloaded = stats.progress_bytes;
+                let pct = if info.total_size > 0 {
                     downloaded as f64 / info.total_size as f64
                 } else {
                     0.0
                 };
-
-                // Print progress (overwrite line if possible, or just periodically)
-                // Just simple log for now.
 
                 if pct >= 0.03 || downloaded > 10 * 1024 * 1024 {
                     println!("Buffering complete. Starting playback.");
@@ -661,7 +674,8 @@ async fn load_media(
             println!("Buffering torrent... (Wait for ~3% or 10MB)");
             loop {
                 let stats = info.handle.stats();
-                                 let downloaded = stats.progress_bytes;                let pct = if info.total_size > 0 {
+                let downloaded = stats.progress_bytes;
+                let pct = if info.total_size > 0 {
                     downloaded as f64 / info.total_size as f64
                 } else {
                     0.0
@@ -715,7 +729,7 @@ async fn load_media(
     };
 
     app.load(media_info, true, play_position).await?;
-    Ok((is_transcoding, probe))
+    Ok((is_transcoding, probe, applied_seek_offset))
 }
 
 fn get_local_ip() -> Option<IpAddr> {
