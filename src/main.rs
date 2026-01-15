@@ -1,10 +1,12 @@
 use castru::controllers::default_media_receiver::DefaultMediaReceiver;
 use castru::controllers::media::{MediaSource, PlaybackStatus};
-use castru::controllers::receiver::ReceiverController; // Added import
+use castru::controllers::receiver::ReceiverController;
 use castru::controllers::tui::{TuiCommand, TuiController};
 use castru::discovery::CastDevice;
-use castru::protocol::media::MediaInformation;
-use castru::server::{get_mime_type, StreamServer};
+use castru::protocol::media::{MediaInformation, MediaResponse, NAMESPACE as MEDIA_NAMESPACE};
+use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
+use castru::server::{get_mime_type, StreamServer, StreamSource};
+use castru::torrent::{TorrentConfig, TorrentManager};
 use castru::{discover_devices_async, CastClient};
 
 use std::collections::VecDeque;
@@ -12,6 +14,7 @@ use std::env;
 use std::error::Error;
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -159,11 +162,17 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     // 0. Prepare Playlist
     let mut playlist = VecDeque::new();
     for input in opts.inputs {
-        let path = Path::new(&input);
-        if path.exists() {
-            playlist.push_back(MediaSource::FilePath(input));
+        if input.starts_with("magnet:?") {
+            playlist.push_back(MediaSource::Magnet(input));
+        } else if input.ends_with(".torrent") {
+            playlist.push_back(MediaSource::TorrentFile(input));
         } else {
-            playlist.push_back(MediaSource::Url(input));
+            let path = Path::new(&input);
+            if path.exists() {
+                playlist.push_back(MediaSource::FilePath(input));
+            } else {
+                playlist.push_back(MediaSource::Url(input));
+            }
         }
     }
 
@@ -176,6 +185,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     let local_ip = get_local_ip().ok_or("Could not determine local IP")?;
     let server_url_base = server.start(&local_ip.to_string()).await?;
     println!("Server started at {}", server_url_base);
+
+    // Setup Torrent Manager
+    let torrent_manager = Arc::new(TorrentManager::new(TorrentConfig::default()).await?);
 
     // 2. Discover or Target device
     let device = if let Some(ip_str) = opts.target_ip {
@@ -242,12 +254,11 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     struct AppState {
         is_transcoding: bool,
         current_time: f64,
-        total_duration: Option<f64>, // Added duration
-        volume_level: Option<f32>,   // Added volume
-        is_muted: bool,              // Added mute
+        total_duration: Option<f64>,
+        volume_level: Option<f32>,
+        is_muted: bool,
         source: Option<MediaSource>,
         current_media_idx: usize,
-        // Metadata for TUI
         video_codec: Option<String>,
         audio_codec: Option<String>,
         device_name: String,
@@ -274,7 +285,16 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     if let Some(source) = playlist.get(0) {
         app_state.current_media_idx = 0;
         app_state.source = Some(source.clone());
-        match load_media(&app, &server, source, &server_url_base, 0.0).await {
+        match load_media(
+            &app,
+            &server,
+            source,
+            &server_url_base,
+            0.0,
+            &torrent_manager,
+        )
+        .await
+        {
             Ok((is_tx, probe)) => {
                 app_state.is_transcoding = is_tx;
                 app_state.current_time = 0.0;
@@ -289,9 +309,6 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     // Event Loop
     let mut events = client.events();
     use castru::controllers::tui::TuiState;
-    use castru::protocol::media::{MediaResponse, NAMESPACE as MEDIA_NAMESPACE};
-    use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE}; // Import TuiState
-
     let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
 
     loop {
@@ -315,7 +332,6 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     TuiCommand::Pause => {
                         let sid = app_state.media_session_id.unwrap_or(1);
                         let _ = app.pause(sid).await;
-                        // Optimistic update
                         current_status = PlaybackStatus::Paused;
                     },
                     TuiCommand::Play => {
@@ -327,7 +343,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                         app_state.current_media_idx += 1;
                          if let Some(source) = playlist.get(app_state.current_media_idx) {
                              app_state.source = Some(source.clone());
-                            if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                            if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                  app_state.is_transcoding = is_tx;
                                  app_state.current_time = 0.0;
                                  app_state.total_duration = probe.duration;
@@ -343,7 +359,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                             app_state.current_media_idx -= 1;
                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                 app_state.source = Some(source.clone());
-                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = 0.0;
                                      app_state.total_duration = probe.duration;
@@ -357,7 +373,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = app_state.current_time + s as f64;
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = new_time;
                                      app_state.total_duration = probe.duration;
@@ -374,7 +390,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = (app_state.current_time - s as f64).max(0.0);
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = new_time;
                                      app_state.total_duration = probe.duration;
@@ -390,29 +406,28 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     TuiCommand::VolumeUp => {
                         let new_vol = (app_state.volume_level.unwrap_or(0.0) + 0.05).min(1.0);
                         let _ = receiver_ctrl.set_volume(new_vol).await;
-                        app_state.volume_level = Some(new_vol); // Optimistic
+                        app_state.volume_level = Some(new_vol);
                     },
                     TuiCommand::VolumeDown => {
                         let new_vol = (app_state.volume_level.unwrap_or(0.0) - 0.05).max(0.0);
                         let _ = receiver_ctrl.set_volume(new_vol).await;
-                        app_state.volume_level = Some(new_vol); // Optimistic
+                        app_state.volume_level = Some(new_vol);
                     },
                     TuiCommand::ToggleMute => {
                         let new_mute = !app_state.is_muted;
                         let _ = receiver_ctrl.set_mute(new_mute).await;
-                        app_state.is_muted = new_mute; // Optimistic
+                        app_state.is_muted = new_mute;
                     },
                     _ => {}
                 }
 
-                // Update TUI
                 let tui_state = TuiState {
                     status: format!("{:?}", current_status),
                     current_time: app_state.current_time as f32,
                     total_duration: app_state.total_duration.map(|d| d as f32),
                     volume_level: app_state.volume_level,
                     is_muted: app_state.is_muted,
-                    media_title: None, // Could parse metadata if available
+                    media_title: None,
                     video_codec: app_state.video_codec.clone(),
                     audio_codec: app_state.audio_codec.clone(),
                     device_name: app_state.device_name.clone(),
@@ -443,7 +458,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                             app_state.current_media_idx += 1;
                                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                                  app_state.source = Some(source.clone());
-                                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
                                                      app_state.is_transcoding = is_tx;
                                                      app_state.current_time = 0.0;
                                                      app_state.total_duration = probe.duration;
@@ -456,13 +471,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                   _ => {}
                               }
 
-                              // Extract duration from media info if available (usually in MEDIA_STATUS `media` field, but simpler to just track what we can or rely on what we probe)
-                              // If we have local probe result, we should store it in AppState
-
                               let tui_state = TuiState {
                                     status: format!("{:?}", current_status),
                                     current_time: app_state.current_time as f32,
-                                    total_duration: app_state.total_duration.map(|d| d as f32), // Needs to be populated from probe or status
+                                    total_duration: app_state.total_duration.map(|d| d as f32),
                                     volume_level: app_state.volume_level,
                                     is_muted: app_state.is_muted,
                                     media_title: None,
@@ -481,7 +493,6 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                               if let Some(muted) = vol.muted {
                                   app_state.is_muted = muted;
                               }
-                              // Redraw
                                let tui_state = TuiState {
                                     status: format!("{:?}", current_status),
                                     current_time: app_state.current_time as f32,
@@ -535,12 +546,11 @@ async fn load_media(
     source: &MediaSource,
     server_base: &str,
     start_time: f64,
+    torrent_manager: &TorrentManager,
 ) -> Result<(bool, MediaProbeResult), Box<dyn Error>> {
     let (url, content_type, is_transcoding, probe) = match source {
         MediaSource::FilePath(path_str) => {
             let path = Path::new(path_str);
-
-            // Probe media
             let probe = match probe_media(path).await {
                 Ok(p) => p,
                 Err(e) => {
@@ -556,20 +566,14 @@ async fn load_media(
             };
 
             if needs_transcoding(&probe) {
-                println!(
-                    "Transcoding needed (Video: {:?}, Audio: {:?})",
-                    probe.video_codec, probe.audio_codec
-                );
                 let config = TranscodeConfig {
                     input_path: path.to_path_buf(),
-                    start_time, // Use provided start_time
+                    start_time,
                     target_video_codec: "libx264".to_string(),
                     target_audio_codec: "aac".to_string(),
                 };
-
                 let pipeline = spawn_ffmpeg(&config)?;
                 server.set_transcode_output(pipeline).await;
-
                 (
                     server_base.to_string(),
                     "video/mp4".to_string(),
@@ -577,7 +581,9 @@ async fn load_media(
                     probe,
                 )
             } else {
-                server.set_file(path.to_path_buf()).await;
+                server
+                    .set_source(StreamSource::Static(path.to_path_buf()))
+                    .await;
                 (
                     server_base.to_string(),
                     get_mime_type(path).to_string(),
@@ -598,6 +604,57 @@ async fn load_media(
                 pix_fmt: None,
             },
         ),
+        MediaSource::Magnet(uri) => {
+            println!("Resolving magnet link...");
+            let (growing, path) = torrent_manager.start_magnet(uri).await?;
+            let total_size = growing.total_size();
+            server
+                .set_source(StreamSource::Growing {
+                    path: path.clone(),
+                    total_size,
+                })
+                .await;
+
+            let mime = get_mime_type(&path).to_string();
+            (
+                server_base.to_string(),
+                mime,
+                false,
+                MediaProbeResult {
+                    video_codec: None,
+                    audio_codec: None,
+                    duration: None,
+                    video_profile: None,
+                    pix_fmt: None,
+                },
+            )
+        }
+        MediaSource::TorrentFile(path_str) => {
+            println!("Loading torrent file...");
+            let (growing, path) = torrent_manager.start_torrent_file(path_str).await?;
+            let total_size = growing.total_size();
+
+            server
+                .set_source(StreamSource::Growing {
+                    path: path.clone(),
+                    total_size,
+                })
+                .await;
+
+            let mime = get_mime_type(&path).to_string();
+            (
+                server_base.to_string(),
+                mime,
+                false,
+                MediaProbeResult {
+                    video_codec: None,
+                    audio_codec: None,
+                    duration: None,
+                    video_profile: None,
+                    pix_fmt: None,
+                },
+            )
+        }
     };
 
     let media_info = MediaInformation {
@@ -617,13 +674,8 @@ async fn load_media(
     Ok((is_transcoding, probe))
 }
 
-// Simple heuristic to get local IP (for now binds to 0.0.0.0 effectively but proper IP needed for URL)
-// This is actually tricky. We need the network interface IP that communicates with the Chromecast.
-// Since we used mDNS, we might be able to infer, but mDNS library blocks.
-// For MVP, allow picking first non-loopback?
 fn get_local_ip() -> Option<IpAddr> {
     use std::net::UdpSocket;
-    // Trick to get local IP by connecting to a public DNS (not actually sending data)
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|addr| addr.ip())
@@ -633,7 +685,6 @@ async fn connect_only(ip: &str) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {}...", ip);
     let client = CastClient::connect(ip, 8009).await?;
     println!("Connected! Waiting for events (Ctrl+C to exit)...");
-
     let mut rx = client.events();
     while let Ok(event) = rx.recv().await {
         println!("[{}] {}", event.namespace, event.payload);
@@ -644,13 +695,10 @@ async fn connect_only(ip: &str) -> Result<(), Box<dyn Error>> {
 async fn launch_app(ip: &str, app_id: &str) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {}...", ip);
     let client = CastClient::connect(ip, 8009).await?;
-
     println!("Connecting to receiver...");
     client.connect_receiver().await?;
-
     println!("Launching app {}...", app_id);
     client.launch_app(app_id).await?;
-
     println!("App launched. Listening for status...");
     let mut rx = client.events();
     while let Ok(event) = rx.recv().await {

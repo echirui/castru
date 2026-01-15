@@ -13,6 +13,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - N/A (Stateless) (009-projector-animation)
 - Rust 2021 + `tokio` (existing). No new dependencies. (010-tune-buffering)
 - N/A (Streaming from filesystem) (010-tune-buffering)
+- Rust 2021 + `librqbit` (for BitTorrent), `tokio` (for async runtime). (011-add-torrent-support)
+- System temporary directory for download buffering. (011-add-torrent-support)
 
 - (001-castv2-protocol)
 
@@ -33,9 +35,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 011-add-torrent-support: Added Rust 2021 + `librqbit` (for BitTorrent), `tokio` (for async runtime).
 - 010-tune-buffering: Added Rust 2021 + `tokio` (existing). No new dependencies.
 - 009-projector-animation: Added Rust 2021 + `crossterm` (existing), `tokio` (existing)
-- 008-tui-enhancements: Added Rust 2021 Edition + `crossterm` (existing)
 
 
 <!-- MANUAL ADDITIONS START -->

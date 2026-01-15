@@ -7,6 +7,7 @@ pub mod proto;
 pub mod protocol;
 pub mod server;
 pub mod tls;
+pub mod torrent;
 pub mod transcode;
 
 pub use client::CastClient;
