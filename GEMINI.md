@@ -29,9 +29,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 008-tui-enhancements: Added Rust 2021 Edition + `crossterm` (existing)
 - 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
 - 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
-- 006-castnow-tui: Added Rust 2021 + `tokio` (full), `crossterm` (existing), `mdns-sd`.
 
 
 <!-- MANUAL ADDITIONS START -->
