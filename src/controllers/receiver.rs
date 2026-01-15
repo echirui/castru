@@ -42,7 +42,6 @@ impl ReceiverController {
         };
         self.send_receiver_request(msg).await
     }
-
     /// Joins an existing application session by connecting to its transport ID.
     pub async fn join_session(&self, transport_id: &str) -> Result<(), CastError> {
         let msg = Connection::Connect;
@@ -59,6 +58,24 @@ impl ReceiverController {
         };
         self.client.send_message(cast_msg).await
     }
+    pub async fn set_volume(&self, level: f32) -> Result<(), CastError> {
+        let request_id = 1;
+        let msg = ReceiverRequest::SetVolume {
+            request_id,
+            volume: receiver::Volume { level: Some(level), muted: None },
+        };
+        self.send_receiver_request(msg).await
+    }
+
+    pub async fn set_mute(&self, muted: bool) -> Result<(), CastError> {
+        let request_id = 1;
+        let msg = ReceiverRequest::SetVolume {
+            request_id,
+            volume: receiver::Volume { level: None, muted: Some(muted) },
+        };
+        self.send_receiver_request(msg).await
+    }
+
 
     async fn send_receiver_request(&self, request: ReceiverRequest) -> Result<(), CastError> {
         let payload = serde_json::to_string(&request).unwrap();

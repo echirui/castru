@@ -102,6 +102,14 @@ impl MediaController {
         self.send_media_request(msg).await
     }
 
+    pub async fn set_volume(&self, media_session_id: i32, level: f32) -> Result<(), CastError> {
+         Ok(())
+    }
+    
+    pub async fn set_stream_mute(&self, media_session_id: i32, muted: bool) -> Result<(), CastError> {
+         Ok(())
+    }
+
     async fn send_media_request(&self, request: MediaRequest) -> Result<(), CastError> {
         let payload = serde_json::to_string(&request).unwrap();
         let msg = CastMessage {
