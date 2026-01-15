@@ -11,6 +11,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - Rust 2021 Edition + `crossterm` (existing) (007-visual-tui)
 - Rust 2021 + `crossterm` (existing), `tokio` (existing) (009-projector-animation)
 - N/A (Stateless) (009-projector-animation)
+- Rust 2021 + `tokio` (existing). No new dependencies. (010-tune-buffering)
+- N/A (Streaming from filesystem) (010-tune-buffering)
 
 - (001-castv2-protocol)
 
@@ -31,9 +33,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 010-tune-buffering: Added Rust 2021 + `tokio` (existing). No new dependencies.
 - 009-projector-animation: Added Rust 2021 + `crossterm` (existing), `tokio` (existing)
 - 008-tui-enhancements: Added Rust 2021 Edition + `crossterm` (existing)
-- 007-visual-tui: Added Rust 2021 Edition + `crossterm` (existing)
 
 
 <!-- MANUAL ADDITIONS START -->

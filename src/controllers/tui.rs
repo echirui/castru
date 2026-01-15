@@ -168,159 +168,129 @@ impl TuiController {
         )
         .ok();
 
-                // 3. Title
+        // 3. Title
 
-                let title_str = format!(" {} ", state.media_title.as_deref().unwrap_or("No Media"));
+        let title_str = format!(" {} ", state.media_title.as_deref().unwrap_or("No Media"));
 
-                let t_y = cy.saturating_sub(2);
+        let t_y = cy.saturating_sub(2);
 
-                let t_x = (cols as usize).saturating_sub(title_str.len()) / 2;
+        let t_x = (cols as usize).saturating_sub(title_str.len()) / 2;
 
-                execute!(stdout, 
+        execute!(
+            stdout,
+            MoveTo(t_x as u16, t_y),
+            SetForegroundColor(Color::White),
+            Print(title_str),
+            ResetColor
+        )
+        .ok();
 
-                    MoveTo(t_x as u16, t_y), 
+        // 4. Status
 
-                    SetForegroundColor(Color::White), 
+        let status_text = format!(" [ {} ] ", state.status.to_uppercase());
 
-                    Print(title_str), 
+        let s_y = t_y + 1;
 
-                    ResetColor
+        let s_x = (cols as usize).saturating_sub(status_text.len()) / 2;
 
-                ).ok();
+        execute!(
+            stdout,
+            MoveTo(s_x as u16, s_y),
+            SetForegroundColor(status_color),
+            Print(status_text),
+            ResetColor
+        )
+        .ok();
 
-        
+        // 5. Time
 
-                // 4. Status
+        let curr_fmt = format_duration(state.current_time);
 
-                let status_text = format!(" [ {} ] ", state.status.to_uppercase());
+        let dur_fmt = if let Some(d) = state.total_duration {
+            format_duration(d)
+        } else {
+            "--:--".to_string()
+        };
 
-                let s_y = t_y + 1;
+        let time_str = format!(" {} / {} ", curr_fmt, dur_fmt);
 
-                let s_x = (cols as usize).saturating_sub(status_text.len()) / 2;
+        let tm_y = s_y + 1;
 
-                execute!(stdout, 
+        let tm_x = (cols as usize).saturating_sub(time_str.len()) / 2;
 
-                    MoveTo(s_x as u16, s_y), 
+        execute!(
+            stdout,
+            MoveTo(tm_x as u16, tm_y),
+            SetForegroundColor(Color::White),
+            Print(&time_str),
+            ResetColor
+        )
+        .ok();
 
-                    SetForegroundColor(status_color), 
+        // 6. Seekbar
 
-                    Print(status_text), 
+        let bar_width = (cols as usize).saturating_sub(20).max(10);
 
-                    ResetColor
+        let bar_x = (cols as usize - bar_width) / 2;
 
-                ).ok();
+        let bar_y = tm_y + 1;
 
-        
+        let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
 
-                // 5. Time
+        execute!(
+            stdout,
+            MoveTo(bar_x as u16, bar_y),
+            SetForegroundColor(Color::White),
+            Print(format!(" {} ", progress_bar)),
+            ResetColor
+        )
+        .ok();
 
-                let curr_fmt = format_duration(state.current_time);
+        // 7. Codecs
 
-                let dur_fmt = if let Some(d) = state.total_duration { format_duration(d) } else { "--:--".to_string() };
+        let v_c = state.video_codec.as_deref().unwrap_or("unknown");
 
-                let time_str = format!(" {} / {} ", curr_fmt, dur_fmt);
+        let a_c = state.audio_codec.as_deref().unwrap_or("unknown");
 
-                let tm_y = s_y + 1;
+        let codec_str = format!(" Video: {} | Audio: {} ", v_c, a_c);
 
-                let tm_x = (cols as usize).saturating_sub(time_str.len()) / 2;
+        let cd_y = bar_y + 1;
 
-                execute!(stdout, 
+        let cd_x = (cols as usize).saturating_sub(codec_str.len()) / 2;
 
-                    MoveTo(tm_x as u16, tm_y), 
+        execute!(
+            stdout,
+            MoveTo(cd_x as u16, cd_y),
+            SetForegroundColor(Color::Grey),
+            Print(codec_str),
+            ResetColor
+        )
+        .ok();
 
-                    SetForegroundColor(Color::White),
+        // 8. Volume
 
-                    Print(&time_str),
-
-                    ResetColor
-
-                ).ok();
-
-        
-
-                // 6. Seekbar
-
-                let bar_width = (cols as usize).saturating_sub(20).max(10);
-
-                let bar_x = (cols as usize - bar_width) / 2;
-
-                let bar_y = tm_y + 1;
-
-                let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
-
-                execute!(stdout, 
-
-                    MoveTo(bar_x as u16, bar_y), 
-
-                    SetForegroundColor(Color::White),
-
-                    Print(format!(" {} ", progress_bar)),
-
-                    ResetColor
-
-                ).ok();
-
-        
-
-                // 7. Codecs
-
-                let v_c = state.video_codec.as_deref().unwrap_or("unknown");
-
-                let a_c = state.audio_codec.as_deref().unwrap_or("unknown");
-
-                let codec_str = format!(" Video: {} | Audio: {} ", v_c, a_c);
-
-                let cd_y = bar_y + 1;
-
-                let cd_x = (cols as usize).saturating_sub(codec_str.len()) / 2;
-
-                execute!(stdout, 
-
-                    MoveTo(cd_x as u16, cd_y), 
-
-                    SetForegroundColor(Color::Grey), 
-
-                    Print(codec_str), 
-
-                    ResetColor
-
-                ).ok();
-
-        
-
-                // 8. Volume
-
-                let vol_str = if state.is_muted {
-
-                    " (Muted) ".to_string()
-
-                } else {
-
-                    match state.volume_level {
-
-                        Some(v) => format!(" Vol: {:.0}% ", v * 100.0),
-
-                        None => " Vol: --% ".to_string(),
-
-                    }
-
-                };
-
-                let v_y = cd_y + 1;
-
-                let v_x = (cols as usize).saturating_sub(vol_str.len()) / 2;
-
-                execute!(stdout, 
-
-                    MoveTo(v_x as u16, v_y), 
-
-                    SetForegroundColor(Color::White),
-
-                    Print(vol_str),
-
-                    ResetColor
-
-                ).ok();
+        let vol_str = if state.is_muted {
+            " (Muted) ".to_string()
+        } else {
+            match state.volume_level {
+                Some(v) => format!(" Vol: {:.0}% ", v * 100.0),
+
+                None => " Vol: --% ".to_string(),
+            }
+        };
+
+        let v_y = cd_y + 1;
+
+        let v_x = (cols as usize).saturating_sub(vol_str.len()) / 2;
+
+        execute!(
+            stdout,
+            MoveTo(v_x as u16, v_y),
+            SetForegroundColor(Color::White),
+            Print(vol_str),
+            ResetColor
+        )
+        .ok();
 
         // Footer
         let footer = " [Space] Toggle  [Arrow] Seek/Vol  [M] Mute  [Q] Quit ";
@@ -388,7 +358,7 @@ fn render_projector_frame(frame: usize, _width: usize, height: usize) -> Vec<Str
             r"       '-------'             '-------'       ",
             r"     __________|_____________|__________     ",
             r"    |                                   |    ",
-            r"    |      _______________________      |===>   .  .",
+            r"          |      _______________________      |===>   .  .",
             r"    |     |      (  ( O )  )      |     |    ",
             r"    |     |_______________________|     |    ",
             r"    |___________________________________|    ",
@@ -403,7 +373,7 @@ fn render_projector_frame(frame: usize, _width: usize, height: usize) -> Vec<Str
             r"       '-------'             '-------'       ",
             r"     __________|_____________|__________     ",
             r"    |                                   |    ",
-            r"    |      _______________________      |===>    .  ",
+            r"          |      _______________________      |===>    .  ",
             r"    |     |      (  ( O )  )      |     |    ",
             r"    |     |_______________________|     |    ",
             r"    |___________________________________|    ",
@@ -418,7 +388,7 @@ fn render_projector_frame(frame: usize, _width: usize, height: usize) -> Vec<Str
             r"       '-------'             '-------'       ",
             r"     __________|_____________|__________     ",
             r"    |                                   |    ",
-            r"    |      _______________________      |===>     . ",
+            r"          |      _______________________      |===>     . ",
             r"    |     |      (  ( O )  )      |     |    ",
             r"    |     |_______________________|     |    ",
             r"    |___________________________________|    ",
@@ -433,7 +403,7 @@ fn render_projector_frame(frame: usize, _width: usize, height: usize) -> Vec<Str
             r"       '-------'             '-------'       ",
             r"     __________|_____________|__________     ",
             r"    |                                   |    ",
-            r"    |      _______________________      |===>       ",
+            r"          |      _______________________      |===>       ",
             r"    |     |      (  ( O )  )      |     |    ",
             r"    |     |_______________________|     |    ",
             r"    |___________________________________|    ",

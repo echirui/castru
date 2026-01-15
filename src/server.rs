@@ -1,11 +1,32 @@
 //! HTTP Server for streaming local content to Cast devices.
 
 use crate::error::CastError;
+use bytes::Bytes;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+
+// Constants for buffering
+const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB
+const DEFAULT_BUFFER_CAPACITY: usize = 8; // 8 chunks
+
+#[derive(Debug, Clone, Copy)]
+pub struct StreamConfig {
+    pub chunk_size: usize,
+    pub buffer_capacity: usize,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            buffer_capacity: DEFAULT_BUFFER_CAPACITY,
+        }
+    }
+}
 
 /// Simple HTTP Server to stream a specific file.
 pub struct StreamServer {
@@ -91,6 +112,29 @@ impl StreamServer {
         let mut trx = self.transcode_rx.lock().await;
         *trx = Some(pipeline.stdout);
     }
+}
+
+async fn stream_file_buffered(
+    socket: &mut TcpStream,
+    file: File,
+    config: StreamConfig,
+    remaining: u64,
+) -> std::io::Result<()> {
+    let (tx, mut rx) = mpsc::channel(config.buffer_capacity);
+
+    // Spawn producer
+    tokio::spawn(producer_task(file, tx, config.chunk_size, remaining));
+
+    // Consumer loop
+    while let Some(res) = rx.recv().await {
+        match res {
+            Ok(chunk) => {
+                socket.write_all(&chunk).await?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 async fn handle_connection(
@@ -184,22 +228,43 @@ async fn handle_connection(
 
     socket.write_all(header.as_bytes()).await?;
 
-    // Streaming loop
-    let mut buffer = vec![0; 64 * 1024]; // 64KB Chunk
-    let mut remaining = length;
-
-    while remaining > 0 {
-        let to_read = std::cmp::min(buffer.len() as u64, remaining);
-        let n = file.read(&mut buffer[..to_read as usize]).await?;
-        if n == 0 {
-            break;
-        }
-
-        socket.write_all(&buffer[..n]).await?;
-        remaining -= n as u64;
-    }
+    // Streaming loop using buffered producer-consumer
+    let config = StreamConfig::default();
+    stream_file_buffered(&mut socket, file, config, length).await?;
 
     Ok(())
+}
+
+async fn producer_task<R>(
+    mut reader: R,
+    tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+    chunk_size: usize,
+    mut remaining: u64,
+) where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = vec![0u8; chunk_size];
+
+    while remaining > 0 {
+        let to_read = std::cmp::min(chunk_size as u64, remaining);
+        match reader.read_exact(&mut buffer[..to_read as usize]).await {
+            Ok(_) => {
+                let chunk = Bytes::copy_from_slice(&buffer[..to_read as usize]);
+                if tx.send(Ok(chunk)).await.is_err() {
+                    break; // Receiver dropped
+                }
+                remaining -= to_read;
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    // Should not happen if logic is correct, but break safely
+                    break;
+                }
+                let _ = tx.send(Err(e)).await;
+                break;
+            }
+        }
+    }
 }
 
 fn parse_range(range: Option<&str>, file_size: u64) -> (u64, u64) {
@@ -268,5 +333,49 @@ mod tests {
         assert_eq!(parse_range(Some("500-"), size), (500, 999));
         assert_eq!(parse_range(Some("-500"), size), (500, 999)); // Last 500 bytes
         assert_eq!(parse_range(None, size), (0, 999));
+    }
+
+    #[tokio::test]
+    async fn test_producer_task_basic() {
+        let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let cursor = std::io::Cursor::new(data.clone());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let chunk_size = 3;
+        let total_len = data.len() as u64;
+
+        tokio::spawn(async move {
+            producer_task(cursor, tx, chunk_size, total_len).await;
+        });
+
+        let mut received_data = Vec::new();
+        while let Some(res) = rx.recv().await {
+            let chunk = res.expect("Should not fail");
+            received_data.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(received_data, data);
+    }
+
+    #[tokio::test]
+    async fn test_producer_task_partial_read() {
+        let data = vec![1u8, 2, 3, 4, 5]; // 5 bytes
+        let cursor = std::io::Cursor::new(data.clone());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let chunk_size = 2;
+        let total_len = data.len() as u64;
+
+        tokio::spawn(async move {
+            producer_task(cursor, tx, chunk_size, total_len).await;
+        });
+
+        let mut received_data = Vec::new();
+        while let Some(res) = rx.recv().await {
+            let chunk = res.expect("Should not fail");
+            received_data.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(received_data, data);
     }
 }
