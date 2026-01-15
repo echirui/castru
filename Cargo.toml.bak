@@ -18,9 +18,6 @@ thiserror = "1.0"
 log = "0.4"
 mdns-sd = "0.10"
 crossterm = "0.27"
-librqbit = { version = "8.1.1", default-features = false, features = ["rust-tls"] }
-uuid = { version = "1.19.0", features = ["v4"] }
-bstr = "1.12.1"
 
 [dependencies.tokio-rustls]
 version = "0.24"

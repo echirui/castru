@@ -8,6 +8,8 @@ use std::collections::VecDeque;
 pub enum MediaSource {
     Url(String),
     FilePath(String),
+    Magnet(String),
+    TorrentFile(String),
 }
 
 #[derive(Debug)]

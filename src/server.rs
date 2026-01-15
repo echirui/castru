@@ -1,11 +1,12 @@
 //! HTTP Server for streaming local content to Cast devices.
 
 use crate::error::CastError;
+use crate::torrent::stream::GrowingFile;
 use bytes::Bytes;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -28,9 +29,48 @@ impl Default for StreamConfig {
     }
 }
 
+#[derive(Clone)]
+pub enum StreamSource {
+    Static(PathBuf),
+    Growing { path: PathBuf, total_size: u64 },
+}
+
+impl StreamSource {
+    pub async fn open(&self) -> std::io::Result<Box<dyn AsyncReadSeek + Unpin + Send>> {
+        match self {
+            StreamSource::Static(p) => {
+                let f = File::open(p).await?;
+                Ok(Box::new(f))
+            }
+            StreamSource::Growing { path, total_size } => {
+                let f = GrowingFile::open(path.clone(), *total_size).await?;
+                Ok(Box::new(f))
+            }
+        }
+    }
+
+    pub fn get_path(&self) -> PathBuf {
+        match self {
+            StreamSource::Static(p) => p.clone(),
+            StreamSource::Growing { path, .. } => path.clone(),
+        }
+    }
+
+    pub fn total_size(&self) -> Option<u64> {
+        match self {
+            StreamSource::Static(_) => None, // Must read metadata
+            StreamSource::Growing { total_size, .. } => Some(*total_size),
+        }
+    }
+}
+
+// Trait alias for convenience
+pub trait AsyncReadSeek: AsyncRead + AsyncSeek {}
+impl<T: AsyncRead + AsyncSeek> AsyncReadSeek for T {}
+
 /// Simple HTTP Server to stream a specific file.
 pub struct StreamServer {
-    file_path: Arc<Mutex<Option<PathBuf>>>,
+    source: Arc<Mutex<Option<StreamSource>>>,
     transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
     transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
     port: u16,
@@ -45,7 +85,7 @@ impl Default for StreamServer {
 impl StreamServer {
     pub fn new() -> Self {
         Self {
-            file_path: Arc::new(Mutex::new(None)),
+            source: Arc::new(Mutex::new(None)),
             transcode_rx: Arc::new(tokio::sync::Mutex::new(None)),
             transcode_process: Arc::new(tokio::sync::Mutex::new(None)),
             port: 0,
@@ -61,7 +101,7 @@ impl StreamServer {
 
         let addr = listener.local_addr().map_err(CastError::Io)?;
         self.port = addr.port();
-        let file_path_clone = self.file_path.clone();
+        let source_clone = self.source.clone();
         let transcode_rx_clone = self.transcode_rx.clone();
 
         println!("Streaming server listening on {}", addr);
@@ -69,10 +109,10 @@ impl StreamServer {
         tokio::spawn(async move {
             loop {
                 if let Ok((socket, _)) = listener.accept().await {
-                    let fp = file_path_clone.clone();
+                    let src = source_clone.clone();
                     let trx = transcode_rx_clone.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, fp, trx).await {
+                        if let Err(e) = handle_connection(socket, src, trx).await {
                             eprintln!("Connection handling error: {}", e);
                         }
                     });
@@ -83,14 +123,22 @@ impl StreamServer {
         Ok(format!("http://{}:{}", local_ip, self.port))
     }
 
-    /// Sets the file to be streamed.
-    /// Sets the file to be streamed.
-    pub async fn set_file(&self, path: PathBuf) {
+    /// Sets the source to be streamed.
+    pub async fn set_source(&self, source: StreamSource) {
         {
-            let mut fp = self.file_path.lock().unwrap();
-            *fp = Some(path);
+            let mut src = self.source.lock().unwrap();
+            *src = Some(source);
         }
-        // Clear transcode if any
+        // Clear transcode
+        self.clear_transcode().await;
+    }
+
+    /// Sets the file to be streamed (Legacy helper).
+    pub async fn set_file(&self, path: PathBuf) {
+        self.set_source(StreamSource::Static(path)).await;
+    }
+
+    async fn clear_transcode(&self) {
         let mut trx = self.transcode_rx.lock().await;
         *trx = None;
         let mut proc = self.transcode_process.lock().await;
@@ -101,11 +149,10 @@ impl StreamServer {
 
     pub async fn set_transcode_output(&self, pipeline: crate::transcode::TranscodingPipeline) {
         // Cleanup old
+        self.clear_transcode().await;
+
         {
             let mut proc = self.transcode_process.lock().await;
-            if let Some(mut child) = proc.take() {
-                let _ = child.start_kill();
-            }
             *proc = Some(pipeline.process);
         }
 
@@ -114,16 +161,19 @@ impl StreamServer {
     }
 }
 
-async fn stream_file_buffered(
+async fn stream_file_buffered<R>(
     socket: &mut TcpStream,
-    file: File,
+    reader: R,
     config: StreamConfig,
     remaining: u64,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
     let (tx, mut rx) = mpsc::channel(config.buffer_capacity);
 
     // Spawn producer
-    tokio::spawn(producer_task(file, tx, config.chunk_size, remaining));
+    tokio::spawn(producer_task(reader, tx, config.chunk_size, remaining));
 
     // Consumer loop
     while let Some(res) = rx.recv().await {
@@ -139,7 +189,7 @@ async fn stream_file_buffered(
 
 async fn handle_connection(
     mut socket: TcpStream,
-    file_path: Arc<Mutex<Option<PathBuf>>>,
+    source_arc: Arc<Mutex<Option<StreamSource>>>,
     transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
 ) -> std::io::Result<()> {
     let mut buf = [0; 1024];
@@ -154,7 +204,6 @@ async fn handle_connection(
     {
         let mut trx = transcode_rx.lock().await;
         if let Some(stdout) = trx.as_mut() {
-            // Serve from stdout
             let status_line = "HTTP/1.1 200 OK";
             let header = format!(
                 "{}\r\n\
@@ -166,7 +215,6 @@ async fn handle_connection(
             );
             socket.write_all(header.as_bytes()).await?;
 
-            // Pipe stdout to socket with chunked encoding
             let mut pipe_buf = [0u8; 65536];
             loop {
                 let n = stdout.read(&mut pipe_buf).await?;
@@ -174,7 +222,6 @@ async fn handle_connection(
                     socket.write_all(b"0\r\n\r\n").await?;
                     break;
                 }
-
                 let size_str = format!("{:X}\r\n", n);
                 socket.write_all(size_str.as_bytes()).await?;
                 socket.write_all(&pipe_buf[..n]).await?;
@@ -190,24 +237,34 @@ async fn handle_connection(
         .find(|line| line.starts_with("Range: bytes="))
         .map(|line| line.trim_start_matches("Range: bytes=").trim());
 
-    // Get file path
-    let path = {
-        let fp = file_path.lock().unwrap();
-        match fp.as_ref() {
-            Some(p) => p.clone(),
+    // Get source
+    let source = {
+        let s = source_arc.lock().unwrap();
+        match s.as_ref() {
+            Some(src) => src.clone(),
             None => return Ok(()), // 404
         }
     };
 
-    let mut file = File::open(&path).await?;
-    let metadata = file.metadata().await?;
-    let file_size = metadata.len();
+    let path = source.get_path();
     let mime_type = get_mime_type(&path);
+
+    // Open stream
+    let mut stream = source.open().await?;
+
+    // Determine size
+    let file_size = if let Some(s) = source.total_size() {
+        s
+    } else {
+        // If static, check metadata. But stream is boxed.
+        // We can just check file path metadata
+        tokio::fs::metadata(&path).await?.len()
+    };
 
     let (start, end) = parse_range(range_header, file_size);
     let length = end - start + 1;
 
-    file.seek(SeekFrom::Start(start)).await?;
+    stream.seek(SeekFrom::Start(start)).await?;
 
     let status_line = if range_header.is_some() {
         "HTTP/1.1 206 Partial Content"
@@ -228,9 +285,8 @@ async fn handle_connection(
 
     socket.write_all(header.as_bytes()).await?;
 
-    // Streaming loop using buffered producer-consumer
     let config = StreamConfig::default();
-    stream_file_buffered(&mut socket, file, config, length).await?;
+    stream_file_buffered(&mut socket, stream, config, length).await?;
 
     Ok(())
 }
@@ -240,7 +296,8 @@ async fn producer_task<R>(
     tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
     chunk_size: usize,
     mut remaining: u64,
-) where
+) -> std::io::Result<()>
+where
     R: AsyncRead + Unpin,
 {
     let mut buffer = vec![0u8; chunk_size];
@@ -265,6 +322,7 @@ async fn producer_task<R>(
             }
         }
     }
+    Ok(())
 }
 
 fn parse_range(range: Option<&str>, file_size: u64) -> (u64, u64) {
@@ -345,7 +403,9 @@ mod tests {
         let total_len = data.len() as u64;
 
         tokio::spawn(async move {
-            producer_task(cursor, tx, chunk_size, total_len).await;
+            producer_task(cursor, tx, chunk_size, total_len)
+                .await
+                .unwrap();
         });
 
         let mut received_data = Vec::new();
@@ -367,7 +427,9 @@ mod tests {
         let total_len = data.len() as u64;
 
         tokio::spawn(async move {
-            producer_task(cursor, tx, chunk_size, total_len).await;
+            producer_task(cursor, tx, chunk_size, total_len)
+                .await
+                .unwrap();
         });
 
         let mut received_data = Vec::new();
