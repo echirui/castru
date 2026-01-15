@@ -471,3 +471,4 @@ impl Drop for TuiController {
         let _ = disable_raw_mode();
     }
 }
+
