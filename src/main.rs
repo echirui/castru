@@ -239,6 +239,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         is_muted: bool,              // Added mute
         source: Option<MediaSource>,
         current_media_idx: usize,
+        // Metadata for TUI
+        video_codec: Option<String>,
+        audio_codec: Option<String>,
+        device_name: String,
+        animation_frame: usize,
+        media_session_id: Option<i32>,
     }
     
     let mut app_state = AppState { 
@@ -249,6 +255,11 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         is_muted: false,
         source: None,
         current_media_idx: 0,
+        video_codec: None,
+        audio_codec: None,
+        device_name: device.friendly_name.clone(),
+        animation_frame: 0,
+        media_session_id: None,
     };
 
     // Load first item
@@ -256,10 +267,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         app_state.current_media_idx = 0;
         app_state.source = Some(source.clone());
         match load_media(&app, &server, source, &server_url_base, 0.0).await {
-            Ok((is_tx, duration)) => {
+            Ok((is_tx, probe)) => {
                  app_state.is_transcoding = is_tx;
                  app_state.current_time = 0.0;
-                 app_state.total_duration = duration;
+                 app_state.total_duration = probe.duration;
+                 app_state.video_codec = probe.video_codec;
+                 app_state.audio_codec = probe.audio_codec;
             },
             Err(e) => eprintln!("Failed to load media: {}", e),
         }
@@ -271,40 +284,47 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
     use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
     use castru::controllers::tui::TuiState; // Import TuiState
 
+    let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
+
     loop {
         tokio::select! {
             Some(cmd) = tui_rx.recv() => {
                 match cmd {
                     TuiCommand::Quit => break,
                     TuiCommand::TogglePlay => {
+                        let sid = app_state.media_session_id.unwrap_or(1);
                         match current_status {
                             PlaybackStatus::Playing | PlaybackStatus::Buffering => {
-                                let _ = app.pause(1).await;
+                                let _ = app.pause(sid).await;
                                 current_status = PlaybackStatus::Paused;
                             },
                             _ => {
-                                let _ = app.play(1).await;
+                                let _ = app.play(sid).await;
                                 current_status = PlaybackStatus::Playing;
                             }
                         }
                     },
                     TuiCommand::Pause => {
-                        let _ = app.pause(1).await;
+                        let sid = app_state.media_session_id.unwrap_or(1);
+                        let _ = app.pause(sid).await;
                         // Optimistic update
                         current_status = PlaybackStatus::Paused;
                     },
                     TuiCommand::Play => {
-                         let _ = app.play(1).await;
+                         let sid = app_state.media_session_id.unwrap_or(1);
+                         let _ = app.play(sid).await;
                          current_status = PlaybackStatus::Playing;
                     },
                     TuiCommand::Next => {
                         app_state.current_media_idx += 1;
                          if let Some(source) = playlist.get(app_state.current_media_idx) {
                              app_state.source = Some(source.clone());
-                            if let Ok((is_tx, duration)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                            if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
                                  app_state.is_transcoding = is_tx;
                                  app_state.current_time = 0.0;
-                                 app_state.total_duration = duration;
+                                 app_state.total_duration = probe.duration;
+                                 app_state.video_codec = probe.video_codec;
+                                 app_state.audio_codec = probe.audio_codec;
                             }
                          } else {
                              app_state.current_media_idx -= 1; 
@@ -315,10 +335,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                             app_state.current_media_idx -= 1;
                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                 app_state.source = Some(source.clone());
-                                if let Ok((is_tx, duration)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = 0.0;
-                                     app_state.total_duration = duration;
+                                     app_state.total_duration = probe.duration;
+                                     app_state.video_codec = probe.video_codec;
+                                     app_state.audio_codec = probe.audio_codec;
                                 }
                              }
                         }
@@ -327,14 +349,16 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = app_state.current_time + s as f64;
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, duration)) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = new_time;
-                                     app_state.total_duration = duration;
+                                     app_state.total_duration = probe.duration;
+                                     app_state.video_codec = probe.video_codec;
+                                     app_state.audio_codec = probe.audio_codec;
                                  }
                              }
                          } else {
-                             let _ = app.seek(1, new_time as f32).await;
+                             let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
                              app_state.current_time = new_time; 
                          }
                     },
@@ -342,14 +366,16 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                          let new_time = (app_state.current_time - s as f64).max(0.0);
                          if app_state.is_transcoding {
                              if let Some(src) = &app_state.source {
-                                 if let Ok((is_tx, duration)) = load_media(&app, &server, src, &server_url_base, new_time).await {
+                                 if let Ok((is_tx, probe)) = load_media(&app, &server, src, &server_url_base, new_time).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.current_time = new_time;
-                                     app_state.total_duration = duration;
+                                     app_state.total_duration = probe.duration;
+                                     app_state.video_codec = probe.video_codec;
+                                     app_state.audio_codec = probe.audio_codec;
                                  }
                              }
                          } else {
-                             let _ = app.seek(1, new_time as f32).await;
+                             let _ = app.seek(app_state.media_session_id.unwrap_or(1), new_time as f32).await;
                              app_state.current_time = new_time; 
                          }
                     },
@@ -379,6 +405,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     volume_level: app_state.volume_level,
                     is_muted: app_state.is_muted,
                     media_title: None, // Could parse metadata if available
+                    video_codec: app_state.video_codec.clone(),
+                    audio_codec: app_state.audio_codec.clone(),
+                    device_name: app_state.device_name.clone(),
+                    animation_frame: app_state.animation_frame,
                 };
                 let _ = tui.draw(&tui_state);
             }
@@ -387,6 +417,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                      if let Ok(MediaResponse::MediaStatus { status, .. }) = serde_json::from_str::<MediaResponse>(&event.payload) {
                           if let Some(s) = status.first() {
                               app_state.current_time = s.current_time as f64;
+                              app_state.media_session_id = Some(s.media_session_id);
                               if let Some(vol) = &s.volume {
                                   app_state.volume_level = vol.level;
                                   if let Some(muted) = vol.muted {
@@ -404,10 +435,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                             app_state.current_media_idx += 1;
                                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                                  app_state.source = Some(source.clone());
-                                                if let Ok((is_tx, duration)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
+                                                if let Ok((is_tx, probe)) = load_media(&app, &server, source, &server_url_base, 0.0).await {
                                                      app_state.is_transcoding = is_tx;
                                                      app_state.current_time = 0.0;
-                                                     app_state.total_duration = duration;
+                                                     app_state.total_duration = probe.duration;
+                                                     app_state.video_codec = probe.video_codec;
+                                                     app_state.audio_codec = probe.audio_codec;
                                                 }
                                              }
                                        }
@@ -425,6 +458,10 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                     volume_level: app_state.volume_level,
                                     is_muted: app_state.is_muted,
                                     media_title: None,
+                                    video_codec: app_state.video_codec.clone(),
+                                    audio_codec: app_state.audio_codec.clone(),
+                                    device_name: app_state.device_name.clone(),
+                                    animation_frame: app_state.animation_frame,
                                 };
                                 let _ = tui.draw(&tui_state);
                           }
@@ -444,10 +481,33 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                     volume_level: app_state.volume_level,
                                     is_muted: app_state.is_muted,
                                     media_title: None,
+                                    video_codec: app_state.video_codec.clone(),
+                                    audio_codec: app_state.audio_codec.clone(),
+                                    device_name: app_state.device_name.clone(),
+                                    animation_frame: app_state.animation_frame,
                                 };
                                 let _ = tui.draw(&tui_state);
                           }
                       }
+                 }
+            }
+            _ = animation_interval.tick() => {
+                 app_state.animation_frame = app_state.animation_frame.wrapping_add(1);
+                 if matches!(current_status, PlaybackStatus::Playing) {
+                      app_state.current_time += 0.15;
+                      let tui_state = TuiState {
+                          status: format!("{:?}", current_status),
+                          current_time: app_state.current_time as f32,
+                          total_duration: app_state.total_duration.map(|d| d as f32),
+                          volume_level: app_state.volume_level,
+                          is_muted: app_state.is_muted,
+                          media_title: None,
+                          video_codec: app_state.video_codec.clone(),
+                          audio_codec: app_state.audio_codec.clone(),
+                          device_name: app_state.device_name.clone(),
+                          animation_frame: app_state.animation_frame,
+                      };
+                      let _ = tui.draw(&tui_state);
                  }
             }
         }
@@ -466,8 +526,8 @@ async fn load_media(
     source: &MediaSource, 
     server_base: &str,
     start_time: f64
-) -> Result<(bool, Option<f64>), Box<dyn Error>> {
-     let (url, content_type, is_transcoding, duration) = match source {
+) -> Result<(bool, MediaProbeResult), Box<dyn Error>> {
+     let (url, content_type, is_transcoding, probe) = match source {
         MediaSource::FilePath(path_str) => {
             let path = Path::new(path_str);
             
@@ -492,13 +552,18 @@ async fn load_media(
                  let pipeline = spawn_ffmpeg(&config)?;
                  server.set_transcode_output(pipeline).await;
                  
-                 (server_base.to_string(), "video/mp4".to_string(), true, probe.duration)
+                 (server_base.to_string(), "video/mp4".to_string(), true, probe)
             } else {
                 server.set_file(path.to_path_buf()).await;
-                (server_base.to_string(), get_mime_type(path).to_string(), false, probe.duration)
+                (server_base.to_string(), get_mime_type(path).to_string(), false, probe)
             }
         },
-        MediaSource::Url(u) => (u.clone(), "video/mp4".to_string(), false, None),
+        MediaSource::Url(u) => (
+             u.clone(), 
+             "video/mp4".to_string(), 
+             false, 
+             MediaProbeResult { video_codec: None, audio_codec: None, duration: None, video_profile: None, pix_fmt: None }
+        ),
      };
 
     let media_info = MediaInformation {
@@ -511,7 +576,7 @@ async fn load_media(
     let play_position = if is_transcoding { 0.0 } else { start_time as f32 };
 
     app.load(media_info, true, play_position).await?;
-    Ok((is_transcoding, duration))
+    Ok((is_transcoding, probe))
 }
 
 // Simple heuristic to get local IP (for now binds to 0.0.0.0 effectively but proper IP needed for URL)
