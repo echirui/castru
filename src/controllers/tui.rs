@@ -2,7 +2,7 @@
 //! Terminal User Interface (TUI) controller.
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{enable_raw_mode, disable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{enable_raw_mode, disable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::cursor::{MoveTo, Hide, Show};
 use crossterm::execute;
 use crossterm::style::{Print, ResetColor, SetForegroundColor, Color};
@@ -16,6 +16,7 @@ use std::thread;
 pub enum TuiCommand {
     Play,
     Pause,
+    TogglePlay, // Added
     Stop,
     Next,
     Previous,
@@ -55,15 +56,15 @@ impl TuiController {
         let (tx, rx) = mpsc::channel(32);
         
         enable_raw_mode().map_err(|e| CastError::Tui(e.to_string()))?;
-        execute!(stdout(), Hide).map_err(|e| CastError::Tui(e.to_string()))?;
+        execute!(stdout(), EnterAlternateScreen, Hide).map_err(|e| CastError::Tui(e.to_string()))?;
 
         thread::spawn(move || {
             loop {
                 if event::poll(Duration::from_millis(100)).unwrap_or(false) {
                     if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
                         let command = match code {
-                             KeyCode::Char(' ') => Some(TuiCommand::Pause),
-                             KeyCode::Char('k') => Some(TuiCommand::Pause),
+                             KeyCode::Char(' ') => Some(TuiCommand::TogglePlay),
+                             KeyCode::Char('k') => Some(TuiCommand::TogglePlay),
                              KeyCode::Char('q') | KeyCode::Esc => Some(TuiCommand::Quit),
                              KeyCode::Right => Some(TuiCommand::SeekForward(30)),
                              KeyCode::Left => Some(TuiCommand::SeekBackward(15)),
@@ -98,14 +99,15 @@ impl TuiController {
     }
 
     pub fn stop(&self) {
+        let _ = execute!(stdout(), Show, LeaveAlternateScreen);
         let _ = disable_raw_mode();
-        let _ = execute!(stdout(), Show);
     }
 
     pub fn draw(&self, state: &TuiState) -> Result<(), CastError> {
         let mut stdout = stdout();
         
-        let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let cy = rows / 2;
         
         // Prepare Status String
         let status_color = match state.status.to_uppercase().as_str() {
@@ -118,6 +120,7 @@ impl TuiController {
         // Format Time
         let curr_fmt = format_duration(state.current_time);
         let dur_fmt = if let Some(d) = state.total_duration { format_duration(d) } else { "--:--".to_string() };
+        let time_str = format!("{} / {}", curr_fmt, dur_fmt);
         
         // Volume
         let vol_str = if state.is_muted {
@@ -129,28 +132,42 @@ impl TuiController {
             }
         };
 
-        // Calculate available width for bar
-        // Layout: [STATUS] CURRENT / TOTAL [BAR] VOLUME
-        // Estimate lengths:
-        // [STATUS]: ~10 chars
-        // Time: ~13 chars "00:00 / 00:00"
-        // Volume: ~10 chars
-        // Spacing: ~4 chars
-        // Total static: ~40 chars
-        
-        let static_len = state.status.len() + 2 + curr_fmt.len() + 3 + dur_fmt.len() + 1 + vol_str.len() + 4;
-        let bar_width = (cols as usize).saturating_sub(static_len);
-        
-        let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
+        execute!(stdout, Clear(ClearType::All)).map_err(|e| CastError::Tui(e.to_string()))?;
 
-        execute!(stdout, MoveTo(0, 0), Clear(ClearType::CurrentLine)).map_err(|e| CastError::Tui(e.to_string()))?;
-        
+        // Title
+        if let Some(ref title) = state.media_title {
+             let t_x = (cols as usize).saturating_sub(title.len()) / 2;
+             execute!(stdout, MoveTo(t_x as u16, cy.saturating_sub(4)), Print(title)).ok();
+        }
+
+        // Status
+        let status_text = format!("[ {} ]", state.status.to_uppercase());
+        let s_x = (cols as usize).saturating_sub(status_text.len()) / 2;
         execute!(stdout, 
-            SetForegroundColor(status_color),
-            Print(format!("[{}]", state.status)),
-            ResetColor,
-            Print(format!(" {} / {} {} {}", curr_fmt, dur_fmt, progress_bar, vol_str))
-        ).map_err(|e| CastError::Tui(e.to_string()))?;
+            MoveTo(s_x as u16, cy.saturating_sub(2)), 
+            SetForegroundColor(status_color), 
+            Print(&status_text), 
+            ResetColor
+        ).ok();
+
+        // Time
+        let tm_x = (cols as usize).saturating_sub(time_str.len()) / 2;
+        execute!(stdout, MoveTo(tm_x as u16, cy), Print(&time_str)).ok();
+
+        // Bar (Seekbar)
+        let bar_width = (cols as usize).saturating_sub(10).max(10);
+        let bar_x = (cols as usize - bar_width) / 2;
+        let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
+        execute!(stdout, MoveTo(bar_x as u16, cy + 2), Print(progress_bar)).ok();
+
+        // Volume
+         let v_x = (cols as usize).saturating_sub(vol_str.len()) / 2;
+        execute!(stdout, MoveTo(v_x as u16, cy + 4), Print(vol_str)).ok();
+
+        // Footer
+        let footer = "[Space] Toggle  [Arrow] Seek/Vol  [M] Mute  [Q] Quit";
+        let f_x = (cols as usize).saturating_sub(footer.len()) / 2;
+        execute!(stdout, MoveTo(f_x as u16, rows.saturating_sub(2)), SetForegroundColor(Color::DarkGrey), Print(footer), ResetColor).ok();
         
         stdout.flush().map_err(CastError::Io)?;
         Ok(())
@@ -182,22 +199,25 @@ fn render_progress_bar(current: f32, total: Option<f32>, width: usize) -> String
     let filled_len = (ratio * bar_len as f32).round() as usize;
     let empty_len = bar_len.saturating_sub(filled_len);
     
-    let bar_body = "=".repeat(filled_len);
-    // Add arrow head if not full and not empty
-    let (body, head) = if filled_len > 0 && filled_len < bar_len {
-        (&bar_body[0..bar_body.len()-1], ">")
-    } else if filled_len == bar_len {
-        (bar_body.as_str(), "")
-    } else {
-        ("", "")
-    };
+    // Use block chars for btop feel? Or classic '='?
+    // User asked for "seekbar like". Block is better.
+    // '█' is good.
+    let bar_body = "█".repeat(filled_len);
+    
+    // Add arrow head? Standard progress bar usually just fills.
+    // Let's stick to simple filling.
+    
+    // Use background color for empty part? Or just spaces.
+    // Let's use '░' for empty part.
+    let empty_body = "░".repeat(empty_len);
 
-    format!("[{}{}{}]", body, head, " ".repeat(empty_len))
+    format!("{}{}", bar_body, empty_body)
 }
 
 impl Drop for TuiController {
     fn drop(&mut self) {
+        let _ = execute!(stdout(), Show, LeaveAlternateScreen);
         let _ = disable_raw_mode();
-        let _ = execute!(stdout(), Show);
     }
 }
+
