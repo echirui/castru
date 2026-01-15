@@ -10,8 +10,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 // Constants for buffering
-const DEFAULT_CHUNK_SIZE: usize = 256 * 1024; // 256KB
-const DEFAULT_BUFFER_CAPACITY: usize = 8; // 8 chunks
+const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1M
+const DEFAULT_BUFFER_CAPACITY: usize = 16; // 16 chunks
 
 #[derive(Debug, Clone, Copy)]
 pub struct StreamConfig {
@@ -167,7 +167,7 @@ async fn handle_connection(
             socket.write_all(header.as_bytes()).await?;
 
             // Pipe stdout to socket with chunked encoding
-            let mut pipe_buf = [0u8; 8192];
+            let mut pipe_buf = [0u8; 65536];
             loop {
                 let n = stdout.read(&mut pipe_buf).await?;
                 if n == 0 {
