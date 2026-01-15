@@ -606,16 +606,40 @@ async fn load_media(
         ),
         MediaSource::Magnet(uri) => {
             println!("Resolving magnet link...");
-            let (growing, path) = torrent_manager.start_magnet(uri).await?;
-            let total_size = growing.total_size();
+            let info = torrent_manager.start_magnet(uri).await?;
+
+            // Buffering Loop
+            println!("Buffering torrent... (Wait for ~3% or 10MB)");
+            loop {
+                let stats = info.handle.stats();
+                                 let downloaded = stats.progress_bytes;                let pct = if info.total_size > 0 {
+                    downloaded as f64 / info.total_size as f64
+                } else {
+                    0.0
+                };
+
+                // Print progress (overwrite line if possible, or just periodically)
+                // Just simple log for now.
+
+                if pct >= 0.03 || downloaded > 10 * 1024 * 1024 {
+                    println!("Buffering complete. Starting playback.");
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
             server
                 .set_source(StreamSource::Growing {
-                    path: path.clone(),
-                    total_size,
+                    path: info.path.clone(),
+                    total_size: info.total_size,
+                    handle: info.handle.clone(),
+                    file_offset: info.file_offset,
+                    piece_length: info.piece_length,
                 })
                 .await;
 
-            let mime = get_mime_type(&path).to_string();
+            let mime = get_mime_type(&info.path).to_string();
             (
                 server_base.to_string(),
                 mime,
@@ -631,17 +655,37 @@ async fn load_media(
         }
         MediaSource::TorrentFile(path_str) => {
             println!("Loading torrent file...");
-            let (growing, path) = torrent_manager.start_torrent_file(path_str).await?;
-            let total_size = growing.total_size();
+            let info = torrent_manager.start_torrent_file(path_str).await?;
+
+            // Buffering Loop (Duplicate logic, could refactor)
+            println!("Buffering torrent... (Wait for ~3% or 10MB)");
+            loop {
+                let stats = info.handle.stats();
+                                 let downloaded = stats.progress_bytes;                let pct = if info.total_size > 0 {
+                    downloaded as f64 / info.total_size as f64
+                } else {
+                    0.0
+                };
+
+                if pct >= 0.03 || downloaded > 10 * 1024 * 1024 {
+                    println!("Buffering complete. Starting playback.");
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
 
             server
                 .set_source(StreamSource::Growing {
-                    path: path.clone(),
-                    total_size,
+                    path: info.path.clone(),
+                    total_size: info.total_size,
+                    handle: info.handle.clone(),
+                    file_offset: info.file_offset,
+                    piece_length: info.piece_length,
                 })
                 .await;
 
-            let mime = get_mime_type(&path).to_string();
+            let mime = get_mime_type(&info.path).to_string();
             (
                 server_base.to_string(),
                 mime,

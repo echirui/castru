@@ -1,25 +1,39 @@
+use librqbit::ManagedTorrent;
 use std::io::{self, SeekFrom};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf};
 
 pub struct GrowingFile {
-    file: Option<File>, // Option to allow initialization in async method
+    file: Option<File>,
     path: PathBuf,
     position: u64,
     total_size: u64,
+    handle: Arc<ManagedTorrent>,
+    file_offset: u64,
+    piece_length: u64,
 }
 
 impl GrowingFile {
-    pub async fn open(path: PathBuf, total_size: u64) -> io::Result<Self> {
+    pub async fn open(
+        path: PathBuf,
+        total_size: u64,
+        handle: Arc<ManagedTorrent>,
+        file_offset: u64,
+        piece_length: u64,
+    ) -> io::Result<Self> {
         let file = File::open(&path).await?;
         Ok(Self {
             file: Some(file),
             path,
             position: 0,
             total_size,
+            handle,
+            file_offset,
+            piece_length,
         })
     }
 
@@ -34,17 +48,32 @@ impl AsyncRead for GrowingFile {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        // Heuristic: check if downloaded amount covers our position
+        // This assumes sequential download from the beginning of the torrent
+        let stats = self.handle.stats();
+        let bytes_downloaded = stats.progress_bytes;
+        let torrent_pos = self.file_offset + self.position;
+
+        if bytes_downloaded <= torrent_pos {
+            if self.position >= self.total_size {
+                return Poll::Ready(Ok(()));
+            }
+
+            // Register waker to retry
+            let waker = cx.waker().clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                waker.wake();
+            });
+            return Poll::Pending;
+        }
+
         let file = match self.file.as_mut() {
             Some(f) => f,
             None => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "File not open"))),
         };
 
         let file_pin = Pin::new(file);
-
-        // We rely on the underlying file's cursor for sequential reads.
-        // However, we need to handle the case where we hit EOF but total_size is not reached.
-
-        // Current position of buffer
         let filled_before = buf.filled().len();
 
         match file_pin.poll_read(cx, buf) {
@@ -56,25 +85,20 @@ impl AsyncRead for GrowingFile {
                     self.position += bytes_read as u64;
                     Poll::Ready(Ok(()))
                 } else {
-                    // EOF reached
                     if self.position >= self.total_size {
-                        // Truly finished
                         Poll::Ready(Ok(()))
                     } else {
-                        // Not finished, wait for more data
+                        // EOF from file but we expect more data
                         let waker = cx.waker().clone();
-                        // This is a bit of a hack: poll loop with sleep.
-                        // Ideally we would listen to a notify, but for file based watcher:
                         tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                             waker.wake();
                         });
                         Poll::Pending
                     }
                 }
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Pending => Poll::Pending,
+            other => other,
         }
     }
 }
@@ -82,11 +106,7 @@ impl AsyncRead for GrowingFile {
 impl AsyncSeek for GrowingFile {
     fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> io::Result<()> {
         if let Some(file) = self.file.as_mut() {
-            Pin::new(file).start_seek(position)?;
-            // Update internal position based on SeekFrom?
-            // File::start_seek returns (), poll_complete returns new pos.
-            // We should track this in poll_complete.
-            Ok(())
+            Pin::new(file).start_seek(position)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "File not open"))
         }
