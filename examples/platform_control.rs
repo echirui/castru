@@ -1,5 +1,5 @@
-use castru::{CastClient, CastError};
 use castru::controllers::receiver::ReceiverController;
+use castru::{CastClient, CastError};
 use std::error::Error;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     receiver_ctrl.get_status().await?;
 
     let mut rx = client.events();
-    
+
     // Listen for one status message to see apps
     if let Ok(event) = rx.recv().await {
         println!("Event: {}", event.payload);

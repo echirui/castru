@@ -1,8 +1,8 @@
 use crate::client::CastClient;
 use crate::error::CastError;
 use crate::proto::CastMessage;
-use crate::protocol::receiver::{self, ReceiverRequest};
 use crate::protocol::connection::{self, Connection};
+use crate::protocol::receiver::{self, ReceiverRequest};
 
 /// Controller for the Receiver namespace (Platform).
 ///
@@ -37,16 +37,14 @@ impl ReceiverController {
     /// Requests the current status of the receiver (volume, running apps).
     pub async fn get_status(&self) -> Result<(), CastError> {
         let request_id = 1;
-        let msg = ReceiverRequest::GetStatus {
-            request_id,
-        };
+        let msg = ReceiverRequest::GetStatus { request_id };
         self.send_receiver_request(msg).await
     }
     /// Joins an existing application session by connecting to its transport ID.
     pub async fn join_session(&self, transport_id: &str) -> Result<(), CastError> {
         let msg = Connection::Connect;
         let payload = serde_json::to_string(&msg).unwrap();
-        
+
         let cast_msg = CastMessage {
             protocol_version: 0,
             source_id: "sender-0".to_string(),
@@ -62,7 +60,10 @@ impl ReceiverController {
         let request_id = 1;
         let msg = ReceiverRequest::SetVolume {
             request_id,
-            volume: receiver::Volume { level: Some(level), muted: None },
+            volume: receiver::Volume {
+                level: Some(level),
+                muted: None,
+            },
         };
         self.send_receiver_request(msg).await
     }
@@ -71,11 +72,13 @@ impl ReceiverController {
         let request_id = 1;
         let msg = ReceiverRequest::SetVolume {
             request_id,
-            volume: receiver::Volume { level: None, muted: Some(muted) },
+            volume: receiver::Volume {
+                level: None,
+                muted: Some(muted),
+            },
         };
         self.send_receiver_request(msg).await
     }
-
 
     async fn send_receiver_request(&self, request: ReceiverRequest) -> Result<(), CastError> {
         let payload = serde_json::to_string(&request).unwrap();

@@ -1,7 +1,7 @@
 use crate::client::CastClient;
 use crate::error::CastError;
 use crate::proto::CastMessage;
-use crate::protocol::media::{self, MediaRequest, MediaInformation};
+use crate::protocol::media::{self, MediaInformation, MediaRequest};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,12 @@ impl MediaController {
     }
 
     /// Loads media content.
-    pub async fn load(&self, media: MediaInformation, autoplay: bool, current_time: f32) -> Result<(), CastError> {
+    pub async fn load(
+        &self,
+        media: MediaInformation,
+        autoplay: bool,
+        current_time: f32,
+    ) -> Result<(), CastError> {
         let request_id = 1; // TODO: Randomize
         let msg = MediaRequest::Load {
             request_id,
@@ -74,11 +79,15 @@ impl MediaController {
     }
 
     /// Toggles between Play and Pause based on the current status.
-    pub async fn toggle_pause(&self, media_session_id: i32, current_status: &PlaybackStatus) -> Result<(), CastError> {
+    pub async fn toggle_pause(
+        &self,
+        media_session_id: i32,
+        current_status: &PlaybackStatus,
+    ) -> Result<(), CastError> {
         match current_status {
-             PlaybackStatus::Playing => self.pause(media_session_id).await,
-             PlaybackStatus::Paused | PlaybackStatus::Idle => self.play(media_session_id).await,
-             _ => Ok(()),
+            PlaybackStatus::Playing => self.pause(media_session_id).await,
+            PlaybackStatus::Paused | PlaybackStatus::Idle => self.play(media_session_id).await,
+            _ => Ok(()),
         }
     }
 
@@ -103,11 +112,15 @@ impl MediaController {
     }
 
     pub async fn set_volume(&self, media_session_id: i32, level: f32) -> Result<(), CastError> {
-         Ok(())
+        Ok(())
     }
-    
-    pub async fn set_stream_mute(&self, media_session_id: i32, muted: bool) -> Result<(), CastError> {
-         Ok(())
+
+    pub async fn set_stream_mute(
+        &self,
+        media_session_id: i32,
+        muted: bool,
+    ) -> Result<(), CastError> {
+        Ok(())
     }
 
     async fn send_media_request(&self, request: MediaRequest) -> Result<(), CastError> {

@@ -16,7 +16,7 @@ async fn test_real_connection() {
             }
             sleep(Duration::from_secs(5)).await;
             println!("Done.");
-        },
+        }
         Err(e) => panic!("Connection failed: {}", e),
     }
 }

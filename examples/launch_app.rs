@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Connecting to {}...", ip);
     let client = CastClient::connect(ip, 8009).await?;
-    
+
     println!("Connecting to receiver...");
     client.connect_receiver().await?;
 
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rx = client.events();
     println!("Listening for events...");
-    
+
     while let Ok(event) = rx.recv().await {
         println!("Event [{}]: {}", event.namespace, event.payload);
         if event.payload.contains("RECEIVER_STATUS") {

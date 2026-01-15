@@ -1,7 +1,7 @@
+use crate::error::CastError;
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
-use mdns_sd::{ServiceDaemon, ServiceEvent};
-use crate::error::CastError;
 use tokio::sync::mpsc;
 
 /// Represents a discovered Cast device on the network.
@@ -41,7 +41,9 @@ pub struct CastDevice {
 pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDevice>, CastError> {
     let mdns = ServiceDaemon::new().map_err(|e| CastError::Protocol(e.to_string()))?;
     let service_type = "_googlecast._tcp.local.";
-    let receiver = mdns.browse(service_type).map_err(|e| CastError::Protocol(e.to_string()))?;
+    let receiver = mdns
+        .browse(service_type)
+        .map_err(|e| CastError::Protocol(e.to_string()))?;
 
     let mut devices = Vec::new();
     let start = Instant::now();
@@ -51,12 +53,24 @@ pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDevice>, CastError>
         if remaining.is_none() {
             break;
         }
-        
+
         if let Ok(event) = receiver.recv_timeout(remaining.unwrap()) {
             if let ServiceEvent::ServiceResolved(info) = event {
-                let friendly_name = info.get_properties().get_property_val_str("fn").unwrap_or("Unknown").to_string();
-                let model_name = info.get_properties().get_property_val_str("md").unwrap_or("Unknown").to_string();
-                let uuid = info.get_properties().get_property_val_str("id").unwrap_or("Unknown").to_string();
+                let friendly_name = info
+                    .get_properties()
+                    .get_property_val_str("fn")
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let model_name = info
+                    .get_properties()
+                    .get_property_val_str("md")
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let uuid = info
+                    .get_properties()
+                    .get_property_val_str("id")
+                    .unwrap_or("Unknown")
+                    .to_string();
 
                 if let Some(ip) = info.get_addresses().iter().next() {
                     devices.push(CastDevice {
@@ -83,16 +97,30 @@ pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDevice>, CastError>
 pub fn discover_devices_async() -> Result<mpsc::Receiver<CastDevice>, CastError> {
     let mdns = ServiceDaemon::new().map_err(|e| CastError::Protocol(e.to_string()))?;
     let service_type = "_googlecast._tcp.local.";
-    let receiver = mdns.browse(service_type).map_err(|e| CastError::Protocol(e.to_string()))?;
-    
+    let receiver = mdns
+        .browse(service_type)
+        .map_err(|e| CastError::Protocol(e.to_string()))?;
+
     let (tx, rx) = mpsc::channel(32);
 
     tokio::task::spawn_blocking(move || {
         while let Ok(event) = receiver.recv() {
             if let ServiceEvent::ServiceResolved(info) = event {
-                let friendly_name = info.get_properties().get_property_val_str("fn").unwrap_or("Unknown").to_string();
-                let model_name = info.get_properties().get_property_val_str("md").unwrap_or("Unknown").to_string();
-                let uuid = info.get_properties().get_property_val_str("id").unwrap_or("Unknown").to_string();
+                let friendly_name = info
+                    .get_properties()
+                    .get_property_val_str("fn")
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let model_name = info
+                    .get_properties()
+                    .get_property_val_str("md")
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let uuid = info
+                    .get_properties()
+                    .get_property_val_str("id")
+                    .unwrap_or("Unknown")
+                    .to_string();
 
                 if let Some(ip) = info.get_addresses().iter().next() {
                     let device = CastDevice {
