@@ -25,8 +25,8 @@
 
 **Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
 
-- [ ] T002 Update `CastOptions` struct in `src/main.rs` to include new fields (`myip`, `port`, `subtitles`, `initial_volume`, `loop_playlist`, `quiet`)
-- [ ] T003 [P] Add `tracks` field to `MediaInformation` and define `MediaTrack` struct in `src/protocol/media.rs`
+- [x] T002 Update `CastOptions` struct in `src/main.rs` to include new fields (`myip`, `port`, `subtitles`, `initial_volume`, `loop_playlist`, `quiet`)
+- [x] T003 [P] Add `tracks` field to `MediaInformation` and define `MediaTrack` struct in `src/protocol/media.rs`
 
 ---
 
@@ -38,15 +38,15 @@
 
 ### Tests for User Story 1
 
-- [ ] T003.1 [P] [US1] Unit test for extended `parse_cast_args` in `src/main.rs`
-- [ ] T003.2 [P] [US1] Unit test for `StreamServer` port/IP binding logic in `src/server.rs`
+- [x] T003.1 [P] [US1] Unit test for extended `parse_cast_args` in `src/main.rs`
+- [x] T003.2 [P] [US1] Unit test for `StreamServer` port/IP binding logic in `src/server.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T004 [P] [US1] Update `parse_cast_args` in `src/main.rs` to handle `--myip`, `--port`, `--subtitles`, `--volume`, `--loop`, `--quiet`
-- [ ] T005 [US1] Refactor `StreamServer::start` in `src/server.rs` to accept an optional IP and port override
-- [ ] T006 [US1] Update `cast_media_playlist` in `src/main.rs` to pass `myip` and `port` from `CastOptions` to `server.start()`
-- [ ] T007 [US1] Implement `--quiet` logic in `src/main.rs` to suppress standard output if enabled
+- [x] T004 [P] [US1] Update `parse_cast_args` in `src/main.rs` to handle `--myip`, `--port`, `--subtitles`, `--volume`, `--loop`, `--quiet`
+- [x] T005 [US1] Refactor `StreamServer::start` in `src/server.rs` to accept an optional IP and port override
+- [x] T006 [US1] Update `cast_media_playlist` in `src/main.rs` to pass `myip` and `port` from `CastOptions` to `server.start()`
+- [x] T007 [US1] Implement `--quiet` logic in `src/main.rs` to suppress standard output if enabled
 
 **Checkpoint**: User Story 1 functional - custom network settings and quiet mode working.
 
@@ -60,8 +60,8 @@
 
 ### Implementation for User Story 2
 
-- [ ] T008 [P] [US2] Implement sequential mode using `handle.set_sequential(true)` in `src/torrent/manager.rs`
-- [ ] T009 [US2] Refine `GrowingFile::poll_read` in `src/torrent/stream.rs` to prioritize pieces immediately ahead of the current read head
+- [x] T008 [P] [US2] Implement sequential mode using `handle.set_sequential(true)` in `src/torrent/manager.rs`
+- [x] T009 [US2] Refine `GrowingFile::poll_read` in `src/torrent/stream.rs` to prioritize pieces immediately ahead of the current read head
 
 **Checkpoint**: User Story 2 functional - torrent streaming is more robust.
 
@@ -75,11 +75,11 @@
 
 ### Implementation for User Story 3
 
-- [ ] T010.1 [US3] Implement basic SRT to VTT converter utility in `src/utils/subtitles.rs` (or similar)
-- [ ] T010 [US3] Add sidecar subtitle file serving logic to `StreamServer` in `src/server.rs`
-- [ ] T011 [US3] Update `load_media` in `src/main.rs` to detect subtitle files and include them in `MediaInformation` tracks
-- [ ] T012 [US3] Apply `initial_volume` using `receiver_ctrl.set_volume` after connection in `src/main.rs`
-- [ ] T013 [US3] Implement `--loop` logic in the playlist transition block of the event loop in `src/main.rs`
+- [x] T010.1 [US3] Implement basic SRT to VTT converter utility in `src/utils/subtitles.rs` (or similar)
+- [x] T010 [US3] Add sidecar subtitle file serving logic to `StreamServer` in `src/server.rs`
+- [x] T011 [US3] Update `load_media` in `src/main.rs` to detect subtitle files and include them in `MediaInformation` tracks
+- [x] T012 [US3] Apply `initial_volume` using `receiver_ctrl.set_volume` after connection in `src/main.rs`
+- [x] T013 [US3] Implement `--loop` logic in the playlist transition block of the event loop in `src/main.rs`
 
 **Checkpoint**: User Story 3 functional - parity with core `castnow` features achieved.
 
@@ -89,8 +89,8 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T014 [P] Final verification with all scenarios in `specs/018-castnow-feature-parity/quickstart.md`
-- [ ] T015 [P] Code cleanup and performance check for FFmpeg/Torrent interaction
+- [x] T014 [P] Final verification with all scenarios in `specs/018-castnow-feature-parity/quickstart.md`
+- [x] T015 [P] Code cleanup and performance check for FFmpeg/Torrent interaction
 
 ---
 

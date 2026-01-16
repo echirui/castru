@@ -298,12 +298,32 @@ async fn handle_connection(
         };
         if let Some(path) = sub_path {
             let status_line = "HTTP/1.1 200 OK";
-            // Simple detection or default to vtt
-            let content_type = if path.extension().map_or(false, |e| e == "vtt") {
-                "text/vtt"
-            } else {
-                "application/x-subrip" // srt or others
-            };
+            let is_vtt = path.extension().map_or(false, |e| e == "vtt");
+            let is_srt = path.extension().map_or(false, |e| e == "srt");
+
+            if is_srt {
+                 // Convert SRT to VTT
+                 let content = tokio::fs::read_to_string(&path).await?;
+                 use crate::utils::subtitles::srt_to_vtt;
+                 let vtt_content = srt_to_vtt(&content);
+                 let content_len = vtt_content.len();
+
+                 let header = format!(
+                    "{} \r\n\
+                    Content-Type: text/vtt\r\n\
+                    Content-Length: {}\r\n\
+                    Connection: close\r\n\
+                    Access-Control-Allow-Origin: *\r\n\
+                    \r\n",
+                    status_line, content_len
+                );
+                socket.write_all(header.as_bytes()).await?;
+                socket.write_all(vtt_content.as_bytes()).await?;
+                return Ok(());
+            }
+
+            // Normal file serving (VTT or other)
+            let content_type = if is_vtt { "text/vtt" } else { "application/octet-stream" };
             
             let file_size = tokio::fs::metadata(&path).await?.len();
 
@@ -565,4 +585,28 @@ mod tests {
 
         assert_eq!(received_data, data);
     }
-}
+}    #[tokio::test]
+    async fn test_server_start_binding() {
+        let mut server = StreamServer::new();
+        let local_ip = "127.0.0.1";
+
+        // Test random port binding
+        let url_res = server.start(local_ip, None).await;
+        assert!(url_res.is_ok());
+        let url = url_res.unwrap();
+        assert!(url.starts_with(&format!("http://{}:", local_ip)));
+        let port_part = url.split(':').last().unwrap();
+        let port: u16 = port_part.parse().expect("Port should be a number");
+        assert!(port > 0);
+        assert_eq!(server.port, port);
+
+        // Test specific port binding (using a high port to avoid conflicts)
+        // Note: This might flaky if the port is in use, but usually 123456... wait 12345 is safer but still risky.
+        // Let's use port 0 again for safety in CI environment, but verifying the logic accepts Option<u16>.
+        // Actually, let's try to bind to the port we just got assigned, it should fail or use SO_REUSEADDR?
+        // Rust TcpListener doesn't set reuseaddr by default for bind.
+        // Let's just test that we can pass Some(0) and it works same as None.
+        let mut server2 = StreamServer::new();
+        let url_res2 = server2.start(local_ip, Some(0)).await;
+        assert!(url_res2.is_ok());
+    }

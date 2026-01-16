@@ -17,6 +17,7 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - System temporary directory for download buffering. (011-add-torrent-support)
 - Rust 2021 + `librqbit` (existing), `tokio`. (012-fix-torrent-playback)
 - Rust 2021 + `tokio`, `ffmpeg` (external). (013-fix-transcode-seek-sync)
+- Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction). (019-reduce-dependencies)
 
 - (001-castv2-protocol)
 
@@ -37,10 +38,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
-- 018-castnow-feature-parity: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+- 019-reduce-dependencies: Added Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction).
+- 018-castnow-feature-parity: Implemented advanced CLI options (myip, port, subtitles, volume, loop, quiet), SRT to VTT conversion, and torrent reliability fixes.
 - 017-torrent-streaming: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
-- 015-torrent-full-download: Implemented full download before playback with TUI progress tracking (percentage) and stall detection.
-- 013-fix-transcode-seek-sync: Fixed seek/sync issues by capturing dynamic `media_session_id` and implementing time interpolation.
 
 
 <!-- MANUAL ADDITIONS START -->

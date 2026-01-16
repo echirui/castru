@@ -1096,7 +1096,6 @@ mod tests {
     #[test]
     fn test_parse_cast_args_basic() {
         let args = vec![
-            "cast".to_string(),
             "--myip".to_string(),
             "192.168.1.50".to_string(),
             "--port".to_string(),
@@ -1125,7 +1124,6 @@ mod tests {
     #[test]
     fn test_parse_cast_args_defaults() {
         let args = vec![
-            "cast".to_string(),
             "video.mp4".to_string(),
         ];
 

@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     println!("Loading media: {}", media_url);
-    app.load(media_info, true, 0.0).await?;
+    app.load(media_info, true, 0.0, None).await?;
     println!("Media loaded! Playing for 10 seconds...");
 
     sleep(Duration::from_secs(10)).await;

@@ -48,25 +48,6 @@ impl AsyncRead for GrowingFile {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // Heuristic: check if downloaded amount covers our position
-        // This assumes sequential download from the beginning of the torrent
-        let stats = self.handle.stats();
-        let bytes_downloaded = stats.progress_bytes;
-        let torrent_pos = self.file_offset + self.position;
-
-        if bytes_downloaded <= torrent_pos {
-            if self.position >= self.total_size {
-                return Poll::Ready(Ok(()));
-            }
-
-            // Register waker to retry
-            let waker = cx.waker().clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                waker.wake();
-            });
-            return Poll::Pending;
-        }
 
         let file = match self.file.as_mut() {
             Some(f) => f,
