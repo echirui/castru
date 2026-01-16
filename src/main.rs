@@ -42,6 +42,26 @@ struct AppState {
 const TORRENT_BUFFER_PCT_THRESHOLD: f32 = 3.0;
 const TORRENT_BUFFER_SIZE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB
 
+struct AppState {
+    is_transcoding: bool,
+    seek_offset: f64,
+    current_time: f64,
+    last_known_time: f64,
+    last_update_instant: std::time::Instant,
+    total_duration: Option<f64>,
+    volume_level: Option<f32>,
+    is_muted: bool,
+    source: Option<MediaSource>,
+    current_media_idx: usize,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    device_name: String,
+    animation_frame: usize,
+    media_session_id: Option<i32>,
+    torrent_progress: Option<f32>,
+    torrent_file_name: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
