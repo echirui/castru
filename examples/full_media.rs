@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     println!("Loading media...");
-    media_ctrl.load(media_info, true, 0.0).await?;
+    media_ctrl.load(media_info, true, 0.0, None).await?;
 
     Ok(())
 }

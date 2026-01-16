@@ -54,6 +54,7 @@ impl TorrentManager {
             _ => return Err(TorrentError::Engine("Unexpected AddTorrentResponse".into())),
         };
 
+
         self.get_info(handle).await
     }
 
@@ -79,6 +80,7 @@ impl TorrentManager {
             AddTorrentResponse::AlreadyManaged(_, h) => h,
             _ => return Err(TorrentError::Engine("Unexpected AddTorrentResponse".into())),
         };
+
 
         self.get_info(handle).await
     }

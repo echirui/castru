@@ -9,6 +9,7 @@ pub mod server;
 pub mod tls;
 pub mod torrent;
 pub mod transcode;
+pub mod utils;
 
 pub use client::CastClient;
 pub use discovery::{discover_devices, discover_devices_async, CastDevice};
