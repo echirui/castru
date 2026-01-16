@@ -41,6 +41,7 @@ pub struct TuiState {
     pub audio_codec: Option<String>,
     pub device_name: String,
     pub animation_frame: usize,
+    pub torrent_progress: Option<f32>,
 }
 
 pub struct TuiController;
@@ -236,15 +237,39 @@ impl TuiController {
         let bar_y = tm_y + 1;
 
         let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
-
-        execute!(
-            stdout,
-            MoveTo(bar_x as u16, bar_y),
-            SetForegroundColor(Color::White),
-            Print(format!(" {} ", progress_bar)),
-            ResetColor
-        )
-        .ok();
+        
+        // Show download progress if active
+        if let Some(pct) = state.torrent_progress {
+             // Overwrite center area with download stats
+             let dl_text = format!(" DOWNLOADING: {:.1}% ", pct);
+             let dl_y = cy;
+             let dl_x = (cols as usize).saturating_sub(dl_text.len()) / 2;
+             execute!(stdout, 
+                 MoveTo(dl_x as u16, dl_y as u16), 
+                 SetForegroundColor(Color::Yellow),
+                 Print(dl_text),
+                 ResetColor
+             ).ok();
+             
+             let dl_bar_width = (cols as usize).saturating_sub(20).max(10);
+             let dl_bar_x = (cols as usize - dl_bar_width) / 2;
+             let dl_bar_y = dl_y + 1;
+             let dl_bar = render_progress_bar(pct, Some(100.0), dl_bar_width);
+             execute!(stdout, 
+                 MoveTo(dl_bar_x as u16, dl_bar_y as u16), 
+                 SetForegroundColor(Color::Yellow),
+                 Print(format!(" {} ", dl_bar)),
+                 ResetColor
+             ).ok();
+        } else {
+            // Normal seekbar rendering
+            execute!(stdout, 
+                MoveTo(bar_x as u16, bar_y as u16), 
+                SetForegroundColor(Color::White),
+                Print(format!(" {} ", progress_bar)),
+                ResetColor
+            ).ok();
+        }
 
         // 7. Codecs
 
