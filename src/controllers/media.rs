@@ -51,6 +51,7 @@ impl MediaController {
         media: MediaInformation,
         autoplay: bool,
         current_time: f32,
+        active_track_ids: Option<Vec<i32>>,
     ) -> Result<(), CastError> {
         let request_id = 1; // TODO: Randomize
         let msg = MediaRequest::Load {
@@ -59,6 +60,7 @@ impl MediaController {
             media,
             autoplay,
             current_time,
+            active_track_ids,
         };
         self.send_media_request(msg).await
     }

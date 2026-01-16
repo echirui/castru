@@ -37,6 +37,7 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 018-castnow-feature-parity: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 - 017-torrent-streaming: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 - 015-torrent-full-download: Implemented full download before playback with TUI progress tracking (percentage) and stall detection.
 - 013-fix-transcode-seek-sync: Fixed seek/sync issues by capturing dynamic `media_session_id` and implementing time interpolation.

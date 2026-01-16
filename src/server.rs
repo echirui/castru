@@ -96,6 +96,7 @@ pub struct StreamServer {
     transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
     transcode_path: Arc<Mutex<Option<PathBuf>>>,
     transcode_done: Arc<std::sync::atomic::AtomicBool>,
+    subtitle_path: Arc<Mutex<Option<PathBuf>>>,
     port: u16,
 }
 
@@ -113,14 +114,16 @@ impl StreamServer {
             transcode_process: Arc::new(tokio::sync::Mutex::new(None)),
             transcode_path: Arc::new(Mutex::new(None)),
             transcode_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            subtitle_path: Arc::new(Mutex::new(None)),
             port: 0,
         }
     }
 
-    /// Starts the HTTP server on an available port.
+    /// Starts the HTTP server on an available port or specified port.
     /// Returns the local IP address and port where the content is served.
-    pub async fn start(&mut self, local_ip: &str) -> Result<String, CastError> {
-        let listener = TcpListener::bind(format!("{}:0", local_ip))
+    pub async fn start(&mut self, local_ip: &str, bind_port: Option<u16>) -> Result<String, CastError> {
+        let port = bind_port.unwrap_or(0);
+        let listener = TcpListener::bind(format!("{}:{}", local_ip, port))
             .await
             .map_err(CastError::Io)?;
 
@@ -129,6 +132,7 @@ impl StreamServer {
         let source_clone = self.source.clone();
         let transcode_path_clone = self.transcode_path.clone();
         let transcode_done_clone = self.transcode_done.clone();
+        let subtitle_path_clone = self.subtitle_path.clone();
 
         println!("Streaming server listening on {}", addr);
 
@@ -138,8 +142,9 @@ impl StreamServer {
                     let src = source_clone.clone();
                     let t_path = transcode_path_clone.clone();
                     let t_done = transcode_done_clone.clone();
+                    let sub_path = subtitle_path_clone.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, src, t_path, t_done).await {
+                        if let Err(e) = handle_connection(socket, src, t_path, t_done, sub_path).await {
                             log::error!("Connection handling error: {}", e);
                         }
                     });
@@ -158,11 +163,21 @@ impl StreamServer {
         }
         // Clear transcode
         self.clear_transcode().await;
+        // Clear subtitle
+        {
+            let mut sub = self.subtitle_path.lock().unwrap();
+            *sub = None;
+        }
     }
 
     /// Sets the file to be streamed (Legacy helper).
     pub async fn set_file(&self, path: PathBuf) {
         self.set_source(StreamSource::Static(path)).await;
+    }
+
+    pub async fn set_subtitle(&self, path: PathBuf) {
+        let mut sub = self.subtitle_path.lock().unwrap();
+        *sub = Some(path);
     }
 
     async fn clear_transcode(&self) {
@@ -239,7 +254,7 @@ async fn stream_file_buffered<R>(
     reader: R,
     config: StreamConfig,
     remaining: u64,
-) -> std::io::Result<()>
+) -> std::io::Result<()> 
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -265,6 +280,7 @@ async fn handle_connection(
     source_arc: Arc<Mutex<Option<StreamSource>>>,
     transcode_path_arc: Arc<Mutex<Option<PathBuf>>>,
     transcode_done: Arc<std::sync::atomic::AtomicBool>,
+    subtitle_path_arc: Arc<Mutex<Option<PathBuf>>>,
 ) -> std::io::Result<()> {
     let mut buf = [0; 1024];
     let n = socket.read(&mut buf).await?;
@@ -273,6 +289,40 @@ async fn handle_connection(
     }
 
     let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Check for subtitle request
+    if request.starts_with("GET /subtitle") {
+         let sub_path = {
+            let p = subtitle_path_arc.lock().unwrap();
+            p.clone()
+        };
+        if let Some(path) = sub_path {
+            let status_line = "HTTP/1.1 200 OK";
+            // Simple detection or default to vtt
+            let content_type = if path.extension().map_or(false, |e| e == "vtt") {
+                "text/vtt"
+            } else {
+                "application/x-subrip" // srt or others
+            };
+            
+            let file_size = tokio::fs::metadata(&path).await?.len();
+
+            let header = format!(
+                "{} \r\n\
+                Content-Type: {}\r\n\
+                Content-Length: {}\r\n\
+                Connection: close\r\n\
+                Access-Control-Allow-Origin: *\r\n\
+                \r\n",
+                status_line, content_type, file_size
+            );
+            socket.write_all(header.as_bytes()).await?;
+            
+            let mut file = tokio::fs::File::open(&path).await?;
+            tokio::io::copy(&mut file, &mut socket).await?;
+            return Ok(());
+        }
+    }
 
     // Check transcode first
     let t_path = {
@@ -379,7 +429,7 @@ async fn producer_task<R>(
     tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
     chunk_size: usize,
     mut remaining: u64,
-) -> std::io::Result<()>
+) -> std::io::Result<()> 
 where
     R: AsyncRead + Unpin,
 {
