@@ -1,7 +1,7 @@
 use castru::controllers::default_media_receiver::DefaultMediaReceiver;
 use castru::controllers::media::{MediaSource, PlaybackStatus};
 use castru::controllers::receiver::ReceiverController;
-use castru::controllers::tui::{TuiCommand, TuiController};
+use castru::controllers::tui::{TuiCommand, TuiController, TuiState};
 use castru::discovery::CastDevice;
 use castru::protocol::media::{MediaInformation, MediaResponse, NAMESPACE as MEDIA_NAMESPACE};
 use castru::protocol::receiver::{ReceiverResponse, NAMESPACE as RECEIVER_NAMESPACE};
@@ -16,6 +16,26 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+struct AppState {
+    is_transcoding: bool,
+    seek_offset: f64,
+    current_time: f64,
+    last_known_time: f64,
+    last_update_instant: std::time::Instant,
+    total_duration: Option<f64>,
+    volume_level: Option<f32>,
+    is_muted: bool,
+    source: Option<MediaSource>,
+    current_media_idx: usize,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    device_name: String,
+    animation_frame: usize,
+    media_session_id: Option<i32>,
+    torrent_progress: Option<f32>,
+    torrent_file_name: Option<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -253,23 +273,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     const WATCHDOG_TIMEOUT_SEC: u64 = 5;
 
-    struct AppState {
-        is_transcoding: bool,
-        seek_offset: f64,
-        current_time: f64,
-        last_known_time: f64,
-        last_update_instant: std::time::Instant,
-        total_duration: Option<f64>,
-        volume_level: Option<f32>,
-        is_muted: bool,
-        source: Option<MediaSource>,
-        current_media_idx: usize,
-        video_codec: Option<String>,
-        audio_codec: Option<String>,
-        device_name: String,
-        animation_frame: usize,
-        media_session_id: Option<i32>,
-    }
+
+
+
 
     let mut app_state = AppState {
         is_transcoding: false,
@@ -287,6 +293,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         device_name: device.friendly_name.clone(),
         animation_frame: 0,
         media_session_id: None,
+        torrent_progress: None,
+        torrent_file_name: None,
     };
 
     // Load first item
@@ -300,6 +308,8 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
             &server_url_base,
             0.0,
             &torrent_manager,
+            &tui,
+            &mut app_state,
         )
         .await
         {
@@ -319,7 +329,6 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     // Event Loop
     let mut events = client.events();
-    use castru::controllers::tui::TuiState;
     let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
     let mut watchdog_interval = tokio::time::interval(Duration::from_secs(1));
 
@@ -329,8 +338,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                 // Watchdog: If playing but time hasn't advanced for X seconds, resume.
                 if matches!(current_status, PlaybackStatus::Playing) {
                     if app_state.last_update_instant.elapsed() > Duration::from_secs(WATCHDOG_TIMEOUT_SEC) {
-                        if let Some(source) = &app_state.source {
-                            match load_media(&app, &server, source, &server_url_base, app_state.current_time, &torrent_manager).await {
+                        if let Some(source) = app_state.source.clone() {
+                            let curr_time = app_state.current_time;
+                            match load_media(&app, &server, &source, &server_url_base, curr_time, &torrent_manager, &tui, &mut app_state).await {
                                 Ok((is_tx, probe, offset)) => {
                                     app_state.is_transcoding = is_tx;
                                     app_state.seek_offset = offset;
@@ -378,7 +388,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                         app_state.current_media_idx += 1;
                          if let Some(source) = playlist.get(app_state.current_media_idx) {
                              app_state.source = Some(source.clone());
-                            if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                            if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
                                  app_state.is_transcoding = is_tx;
                                  app_state.seek_offset = offset;
                                  app_state.current_time = offset;
@@ -397,7 +407,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                             app_state.current_media_idx -= 1;
                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                 app_state.source = Some(source.clone());
-                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.seek_offset = offset;
                                      app_state.current_time = offset;
@@ -413,9 +423,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     TuiCommand::SeekForward(s) => {
                          let new_time = app_state.current_time + s as f64;
                          if app_state.is_transcoding {
-                             if let Some(src) = &app_state.source {
-                                 match load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
-                                     Ok((is_tx, probe, offset)) => {
+                             if let Some(src) = app_state.source.clone() {
+                                 match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state).await {
+                                      Ok((is_tx, probe, offset)) => {
                                          app_state.is_transcoding = is_tx;
                                          app_state.seek_offset = offset;
                                          app_state.current_time = new_time;
@@ -438,9 +448,9 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     TuiCommand::SeekBackward(s) => {
                          let new_time = (app_state.current_time - s as f64).max(0.0);
                          if app_state.is_transcoding {
-                             if let Some(src) = &app_state.source {
-                                 match load_media(&app, &server, src, &server_url_base, new_time, &torrent_manager).await {
-                                     Ok((is_tx, probe, offset)) => {
+                             if let Some(src) = app_state.source.clone() {
+                                 match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state).await {
+                                      Ok((is_tx, probe, offset)) => {
                                          app_state.is_transcoding = is_tx;
                                          app_state.seek_offset = offset;
                                          app_state.current_time = new_time;
@@ -489,6 +499,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                     audio_codec: app_state.audio_codec.clone(),
                     device_name: app_state.device_name.clone(),
                     animation_frame: app_state.animation_frame,
+                    torrent_progress: app_state.torrent_progress,
                 };
                 let _ = tui.draw(&tui_state);
             }
@@ -525,8 +536,20 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                        current_status = PlaybackStatus::Idle;
                                        if s.idle_reason.as_deref() == Some("ERROR") {
                                             println!("Watchdog: Detected Error status. Resuming...");
-                                            if let Some(source) = &app_state.source {
-                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, app_state.current_time, &torrent_manager).await {
+                                            if let Some(source) = app_state.source.clone() {
+                                                let curr_time = app_state.current_time;
+                                                if let Ok((is_tx, probe, offset)) = load_media(
+                                                    &app,
+                                                    &server,
+                                                    &source,
+                                                    &server_url_base,
+                                                    curr_time,
+                                                    &torrent_manager,
+                                                    &tui,
+                                                    &mut app_state,
+                                                )
+                                                .await
+                                                {
                                                      app_state.is_transcoding = is_tx;
                                                      app_state.seek_offset = offset;
                                                      app_state.last_known_time = app_state.current_time;
@@ -540,7 +563,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                             app_state.current_media_idx += 1;
                                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                                  app_state.source = Some(source.clone());
-                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager).await {
+                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
                                                      app_state.is_transcoding = is_tx;
                                                      app_state.seek_offset = offset;
                                                      app_state.current_time = offset;
@@ -568,6 +591,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                     audio_codec: app_state.audio_codec.clone(),
                                     device_name: app_state.device_name.clone(),
                                     animation_frame: app_state.animation_frame,
+                                    torrent_progress: app_state.torrent_progress,
                                 };
                                 let _ = tui.draw(&tui_state);
                           }
@@ -590,6 +614,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                     audio_codec: app_state.audio_codec.clone(),
                                     device_name: app_state.device_name.clone(),
                                     animation_frame: app_state.animation_frame,
+                                    torrent_progress: app_state.torrent_progress,
                                 };
                                 let _ = tui.draw(&tui_state);
                           }
@@ -611,6 +636,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                           audio_codec: app_state.audio_codec.clone(),
                           device_name: app_state.device_name.clone(),
                           animation_frame: app_state.animation_frame,
+                          torrent_progress: app_state.torrent_progress,
                       };
                       let _ = tui.draw(&tui_state);
                  }
@@ -633,6 +659,8 @@ async fn load_media(
     server_base: &str,
     start_time: f64,
     torrent_manager: &TorrentManager,
+    tui: &TuiController,
+    app_state: &mut AppState,
 ) -> Result<(bool, MediaProbeResult, f64), Box<dyn Error>> {
     let mut applied_seek_offset = 0.0;
     let (url, content_type, is_transcoding, probe) = match source {
@@ -693,28 +721,9 @@ async fn load_media(
             },
         ),
         MediaSource::Magnet(uri) => {
-            println!("Resolving magnet link...");
             let info = torrent_manager.start_magnet(uri).await?;
-
-            // Buffering Loop
-            println!("Buffering torrent... (Wait for ~3% or 10MB)");
-            loop {
-                let stats = info.handle.stats();
-                let downloaded = stats.progress_bytes;
-                let pct = if info.total_size > 0 {
-                    downloaded as f64 / info.total_size as f64
-                } else {
-                    0.0
-                };
-
-                if pct >= 0.03 || downloaded > 10 * 1024 * 1024 {
-                    println!("Buffering complete. Starting playback.");
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-
+            wait_for_torrent_download(&info, tui, app_state).await?;
+            
             server
                 .set_source(StreamSource::Growing {
                     path: info.path.clone(),
@@ -740,27 +749,8 @@ async fn load_media(
             )
         }
         MediaSource::TorrentFile(path_str) => {
-            println!("Loading torrent file...");
             let info = torrent_manager.start_torrent_file(path_str).await?;
-
-            // Buffering Loop (Duplicate logic, could refactor)
-            println!("Buffering torrent... (Wait for ~3% or 10MB)");
-            loop {
-                let stats = info.handle.stats();
-                let downloaded = stats.progress_bytes;
-                let pct = if info.total_size > 0 {
-                    downloaded as f64 / info.total_size as f64
-                } else {
-                    0.0
-                };
-
-                if pct >= 0.03 || downloaded > 10 * 1024 * 1024 {
-                    println!("Buffering complete. Starting playback.");
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+            wait_for_torrent_download(&info, tui, app_state).await?;
 
             server
                 .set_source(StreamSource::Growing {
@@ -803,6 +793,67 @@ async fn load_media(
 
     app.load(media_info, true, play_position).await?;
     Ok((is_transcoding, probe, applied_seek_offset))
+}
+
+use castru::torrent::TorrentStreamInfo;
+
+async fn wait_for_torrent_download(
+    info: &TorrentStreamInfo,
+    tui: &TuiController,
+    app_state: &mut AppState,
+) -> Result<(), Box<dyn Error>> {
+    app_state.torrent_file_name = Some(
+        info.path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+    );
+    let mut last_progress = 0.0;
+    let mut stall_start = std::time::Instant::now();
+
+    loop {
+        let stats = info.handle.stats();
+        let downloaded = stats.progress_bytes;
+        let pct = if info.total_size > 0 {
+            (downloaded as f32 / info.total_size as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        if pct > last_progress {
+            last_progress = pct;
+            stall_start = std::time::Instant::now();
+        } else if pct < 100.0 && stall_start.elapsed() > Duration::from_secs(30) {
+            return Err("Torrent download stalled (no progress for 30s)".into());
+        }
+
+        app_state.torrent_progress = Some(pct);
+
+        let tui_state = TuiState {
+            status: "DOWNLOADING".to_string(),
+            current_time: 0.0,
+            total_duration: None,
+            volume_level: app_state.volume_level,
+            is_muted: app_state.is_muted,
+            media_title: app_state.torrent_file_name.clone(),
+            video_codec: None,
+            audio_codec: None,
+            device_name: app_state.device_name.clone(),
+            animation_frame: app_state.animation_frame,
+            torrent_progress: Some(pct),
+        };
+        let _ = tui.draw(&tui_state);
+
+        if pct >= 100.0 {
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        app_state.animation_frame = app_state.animation_frame.wrapping_add(1);
+    }
+    app_state.torrent_progress = None;
+    Ok(())
 }
 
 fn get_local_ip() -> Option<IpAddr> {
