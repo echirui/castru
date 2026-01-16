@@ -26,6 +26,7 @@ pub enum TuiCommand {
     VolumeUp,
     VolumeDown,
     ToggleMute,
+    Reconnect,
     Quit,
 }
 
@@ -83,6 +84,7 @@ impl TuiController {
                         KeyCode::Char('m') => Some(TuiCommand::ToggleMute),
                         KeyCode::Char('n') => Some(TuiCommand::Next),
                         KeyCode::Char('p') => Some(TuiCommand::Previous),
+                        KeyCode::Char('r') => Some(TuiCommand::Reconnect),
                         _ => {
                             if modifiers.contains(KeyModifiers::CONTROL)
                                 && code == KeyCode::Char('c')
@@ -125,6 +127,7 @@ impl TuiController {
             "PLAYING" => Color::Green,
             "PAUSED" => Color::Yellow,
             "BUFFERING" => Color::Blue,
+            "RECONNECTING" => Color::Magenta,
             _ => Color::Grey,
         };
 
@@ -188,7 +191,16 @@ impl TuiController {
 
         // 4. Status
 
-        let status_text = format!(" [ {} ] ", state.status.to_uppercase());
+        let dl_suffix = if let Some(pct) = state.torrent_progress {
+            if pct < 100.0 {
+                format!(" | DL: {:.1}%", pct)
+            } else {
+                "".to_string()
+            }
+        } else {
+            "".to_string()
+        };
+        let status_text = format!(" [ {}{} ] ", state.status.to_uppercase(), dl_suffix);
 
         let s_y = t_y + 1;
 
@@ -237,31 +249,37 @@ impl TuiController {
         let bar_y = tm_y + 1;
 
         let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
-        
+
         // Show download progress if active
+        let mut progress_shown = false;
         if let Some(pct) = state.torrent_progress {
-             // Overwrite center area with download stats
-             let dl_text = format!(" DOWNLOADING: {:.1}% ", pct);
-             let dl_y = cy;
-             let dl_x = (cols as usize).saturating_sub(dl_text.len()) / 2;
-             execute!(stdout, 
-                 MoveTo(dl_x as u16, dl_y as u16), 
-                 SetForegroundColor(Color::Yellow),
-                 Print(dl_text),
-                 ResetColor
-             ).ok();
-             
-             let dl_bar_width = (cols as usize).saturating_sub(20).max(10);
-             let dl_bar_x = (cols as usize - dl_bar_width) / 2;
-             let dl_bar_y = dl_y + 1;
-             let dl_bar = render_progress_bar(pct, Some(100.0), dl_bar_width);
-             execute!(stdout, 
-                 MoveTo(dl_bar_x as u16, dl_bar_y as u16), 
-                 SetForegroundColor(Color::Yellow),
-                 Print(format!(" {} ", dl_bar)),
-                 ResetColor
-             ).ok();
-        } else {
+            if state.status.to_uppercase().contains("BUFFERING") {
+                 // Overwrite center area with download stats
+                 let dl_text = format!(" DOWNLOADING: {:.1}% ", pct);
+                 let dl_y = cy;
+                 let dl_x = (cols as usize).saturating_sub(dl_text.len()) / 2;
+                 execute!(stdout, 
+                     MoveTo(dl_x as u16, dl_y as u16), 
+                     SetForegroundColor(Color::Yellow),
+                     Print(dl_text),
+                     ResetColor
+                 ).ok();
+                 
+                 let dl_bar_width = (cols as usize).saturating_sub(20).max(10);
+                 let dl_bar_x = (cols as usize - dl_bar_width) / 2;
+                 let dl_bar_y = dl_y + 1;
+                 let dl_bar = render_progress_bar(pct, Some(100.0), dl_bar_width);
+                 execute!(stdout, 
+                     MoveTo(dl_bar_x as u16, dl_bar_y as u16), 
+                     SetForegroundColor(Color::Yellow),
+                     Print(format!(" {} ", dl_bar)),
+                     ResetColor
+                 ).ok();
+                 progress_shown = true;
+            }
+        }
+
+        if !progress_shown {
             // Normal seekbar rendering
             execute!(stdout, 
                 MoveTo(bar_x as u16, bar_y as u16), 

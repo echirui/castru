@@ -21,6 +21,7 @@ crossterm = "0.27"
 librqbit = { version = "8.1.1", default-features = false, features = ["rust-tls"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 bstr = "1.12.1"
+simplelog = "0.12"
 
 [dependencies.tokio-rustls]
 version = "0.24"

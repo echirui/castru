@@ -10,10 +10,11 @@ use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use std::time::Duration;
 
 // Constants for buffering
-const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1M
-const DEFAULT_BUFFER_CAPACITY: usize = 16; // 16 chunks
+const DEFAULT_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8M
+const DEFAULT_BUFFER_CAPACITY: usize = 64; // 64 chunks
 
 #[derive(Debug, Clone, Copy)]
 pub struct StreamConfig {
@@ -93,6 +94,8 @@ pub struct StreamServer {
     source: Arc<Mutex<Option<StreamSource>>>,
     transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
     transcode_process: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
+    transcode_path: Arc<Mutex<Option<PathBuf>>>,
+    transcode_done: Arc<std::sync::atomic::AtomicBool>,
     port: u16,
 }
 
@@ -108,6 +111,8 @@ impl StreamServer {
             source: Arc::new(Mutex::new(None)),
             transcode_rx: Arc::new(tokio::sync::Mutex::new(None)),
             transcode_process: Arc::new(tokio::sync::Mutex::new(None)),
+            transcode_path: Arc::new(Mutex::new(None)),
+            transcode_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             port: 0,
         }
     }
@@ -122,7 +127,8 @@ impl StreamServer {
         let addr = listener.local_addr().map_err(CastError::Io)?;
         self.port = addr.port();
         let source_clone = self.source.clone();
-        let transcode_rx_clone = self.transcode_rx.clone();
+        let transcode_path_clone = self.transcode_path.clone();
+        let transcode_done_clone = self.transcode_done.clone();
 
         println!("Streaming server listening on {}", addr);
 
@@ -130,10 +136,11 @@ impl StreamServer {
             loop {
                 if let Ok((socket, _)) = listener.accept().await {
                     let src = source_clone.clone();
-                    let trx = transcode_rx_clone.clone();
+                    let t_path = transcode_path_clone.clone();
+                    let t_done = transcode_done_clone.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, src, trx).await {
-                            eprintln!("Connection handling error: {}", e);
+                        if let Err(e) = handle_connection(socket, src, t_path, t_done).await {
+                            log::error!("Connection handling error: {}", e);
                         }
                     });
                 }
@@ -163,9 +170,19 @@ impl StreamServer {
             let mut trx = self.transcode_rx.lock().await;
             *trx = None;
         }
-        let mut proc = self.transcode_process.lock().await;
-        if let Some(mut child) = proc.take() {
-            let _ = child.kill().await;
+        {
+            let mut proc = self.transcode_process.lock().await;
+            if let Some(mut child) = proc.take() {
+                let _ = child.kill().await;
+            }
+        }
+        self.transcode_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let old_path = {
+            let mut p = self.transcode_path.lock().unwrap();
+            p.take()
+        };
+        if let Some(path) = old_path {
+            let _ = tokio::fs::remove_file(path).await;
         }
     }
 
@@ -173,13 +190,47 @@ impl StreamServer {
         // Cleanup old
         self.clear_transcode().await;
 
+        let temp_dir = std::env::temp_dir().join("castru_transcode");
+        let _ = tokio::fs::create_dir_all(&temp_dir).await;
+        let file_name = format!("transcode_{}.mp4", uuid::Uuid::new_v4());
+        let path = temp_dir.join(file_name);
+
+        {
+            let mut p = self.transcode_path.lock().unwrap();
+            *p = Some(path.clone());
+        }
+
+        self.transcode_done.store(false, std::sync::atomic::Ordering::SeqCst);
+
         {
             let mut proc = self.transcode_process.lock().await;
             *proc = Some(pipeline.process);
         }
 
-        let mut trx = self.transcode_rx.lock().await;
-        *trx = Some(pipeline.stdout);
+        let mut stdout = pipeline.stdout;
+        let path_clone = path.clone();
+        let done_flag = self.transcode_done.clone();
+
+        tokio::spawn(async move {
+            if let Ok(mut file) = tokio::fs::File::create(&path_clone).await {
+                let mut buf = [0u8; 65536];
+                loop {
+                    if done_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    match stdout.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Err(_) = file.write_all(&buf[..n]).await {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            done_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
     }
 }
 
@@ -212,7 +263,8 @@ where
 async fn handle_connection(
     mut socket: TcpStream,
     source_arc: Arc<Mutex<Option<StreamSource>>>,
-    transcode_rx: Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdout>>>,
+    transcode_path_arc: Arc<Mutex<Option<PathBuf>>>,
+    transcode_done: Arc<std::sync::atomic::AtomicBool>,
 ) -> std::io::Result<()> {
     let mut buf = [0; 1024];
     let n = socket.read(&mut buf).await?;
@@ -223,46 +275,45 @@ async fn handle_connection(
     let request = String::from_utf8_lossy(&buf[..n]);
 
     // Check transcode first
-    {
-        let has_transcode = {
-            let trx = transcode_rx.lock().await;
-            trx.is_some()
-        };
+    let t_path = {
+        let p = transcode_path_arc.lock().unwrap();
+        p.clone()
+    };
 
-        if has_transcode {
-            let status_line = "HTTP/1.1 200 OK";
-            let header = format!(
-                "{} \r\n\
-                Content-Type: video/mp4\r\n\
-                Connection: keep-alive\r\n\
-                Transfer-Encoding: chunked\r\n\
-                \r\n",
-                status_line
-            );
-            socket.write_all(header.as_bytes()).await?;
+    if let Some(path) = t_path {
+        let status_line = "HTTP/1.1 200 OK";
+        let header = format!(
+            "{} \r\n\
+            Content-Type: video/mp4\r\n\
+            Connection: keep-alive\r\n\
+            Transfer-Encoding: chunked\r\n\
+            \r\n",
+            status_line
+        );
+        socket.write_all(header.as_bytes()).await?;
 
-            let mut pipe_buf = [0u8; 65536];
-            loop {
-                let n = {
-                    let mut trx = transcode_rx.lock().await;
-                    if let Some(stdout) = trx.as_mut() {
-                        stdout.read(&mut pipe_buf).await?
-                    } else {
-                        0 // Force exit if transcode cleared
+        let mut file = tokio::fs::File::open(&path).await?;
+        let mut pipe_buf = [0u8; 65536];
+        loop {
+            match file.read(&mut pipe_buf).await {
+                Ok(0) => {
+                    if transcode_done.load(std::sync::atomic::Ordering::SeqCst) {
+                        socket.write_all(b"0\r\n\r\n").await?;
+                        break;
                     }
-                };
-
-                if n == 0 {
-                    socket.write_all(b"0\r\n\r\n").await?;
-                    break;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
                 }
-                let size_str = format!("{:X}\r\n", n);
-                socket.write_all(size_str.as_bytes()).await?;
-                socket.write_all(&pipe_buf[..n]).await?;
-                socket.write_all(b"\r\n").await?;
+                Ok(n) => {
+                    let size_str = format!("{:X}\r\n", n);
+                    socket.write_all(size_str.as_bytes()).await?;
+                    socket.write_all(&pipe_buf[..n]).await?;
+                    socket.write_all(b"\r\n").await?;
+                }
+                Err(e) => return Err(e),
             }
-            return Ok(());
         }
+        return Ok(());
     }
 
     // Extract Range header

@@ -1,6 +1,8 @@
 use super::{TorrentConfig, TorrentError};
 use bstr::ByteSlice;
-use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent, Session};
+use librqbit::{
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent, Session, SessionOptions,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,7 +20,13 @@ impl TorrentManager {
             .await
             .map_err(TorrentError::Io)?;
 
-        let session = Session::new(output_dir.clone())
+        let session = Session::new_with_opts(
+            output_dir.clone(),
+            SessionOptions {
+                disable_dht_persistence: true,
+                ..Default::default()
+            },
+        )
             .await
             .map_err(|e| TorrentError::Engine(e.to_string()))?;
         Ok(Self {
@@ -32,7 +40,10 @@ impl TorrentManager {
             .session
             .add_torrent(
                 AddTorrent::from_url(uri),
-                Some(AddTorrentOptions::default()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    ..Default::default()
+                }),
             )
             .await
             .map_err(|e| TorrentError::Engine(e.to_string()))?;
@@ -55,7 +66,10 @@ impl TorrentManager {
             .session
             .add_torrent(
                 AddTorrent::from_bytes(content),
-                Some(AddTorrentOptions::default()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    ..Default::default()
+                }),
             )
             .await
             .map_err(|e| TorrentError::Engine(e.to_string()))?;
