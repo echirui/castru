@@ -254,7 +254,7 @@ async fn stream_file_buffered<R>(
     reader: R,
     config: StreamConfig,
     remaining: u64,
-) -> std::io::Result<()>
+) -> std::io::Result<()> 
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -429,7 +429,7 @@ async fn producer_task<R>(
     tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
     chunk_size: usize,
     mut remaining: u64,
-) -> std::io::Result<()>
+) -> std::io::Result<()> 
 where
     R: AsyncRead + Unpin,
 {
