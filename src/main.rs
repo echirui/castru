@@ -37,6 +37,7 @@ struct AppState {
     torrent_progress: Option<f32>,
     torrent_file_name: Option<String>,
     torrent_handle: Option<Arc<ManagedTorrent>>,
+    subtitles: Option<String>,
 }
 
 const TORRENT_BUFFER_PCT_THRESHOLD: f32 = 3.0;
@@ -120,6 +121,12 @@ fn print_usage() {
     println!("  --ip <IP>      Connect to specific IP");
     println!("  --name <NAME>  Connect to device with specific Friendly Name");
     println!("  --log <FILE>   Output logs to specific file");
+    println!("  --myip <IP>    Specify local interface IP to bind to");
+    println!("  --port <PORT>  Specify internal server port");
+    println!("  --subtitles <FILE>  Load sidecar subtitle file");
+    println!("  --volume <0.0-1.0>  Set initial volume");
+    println!("  --loop         Loop the playlist");
+    println!("  --quiet        Suppress non-critical output");
 }
 
 struct CastOptions {
@@ -127,6 +134,12 @@ struct CastOptions {
     target_name: Option<String>,
     log_file: Option<String>,
     inputs: Vec<String>,
+    myip: Option<String>,
+    port: Option<u16>,
+    subtitles: Option<String>,
+    volume: Option<f32>,
+    loop_playlist: bool,
+    quiet: bool,
 }
 
 fn parse_cast_args(args: &[String]) -> CastOptions {
@@ -134,6 +147,12 @@ fn parse_cast_args(args: &[String]) -> CastOptions {
     let mut target_name = None;
     let mut log_file = None;
     let mut inputs = Vec::new();
+    let mut myip = None;
+    let mut port = None;
+    let mut subtitles = None;
+    let mut volume = None;
+    let mut loop_playlist = false;
+    let mut quiet = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -156,6 +175,40 @@ fn parse_cast_args(args: &[String]) -> CastOptions {
                     i += 1;
                 }
             }
+            "--myip" => {
+                if i + 1 < args.len() {
+                    myip = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--port" => {
+                if i + 1 < args.len() {
+                    if let Ok(p) = args[i + 1].parse::<u16>() {
+                        port = Some(p);
+                    }
+                    i += 1;
+                }
+            }
+            "--subtitles" => {
+                if i + 1 < args.len() {
+                    subtitles = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--volume" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f32>() {
+                        volume = Some(v);
+                    }
+                    i += 1;
+                }
+            }
+            "--loop" => {
+                loop_playlist = true;
+            }
+            "--quiet" => {
+                quiet = true;
+            }
             val => {
                 inputs.push(val.to_string());
             }
@@ -168,6 +221,12 @@ fn parse_cast_args(args: &[String]) -> CastOptions {
         target_name,
         log_file,
         inputs,
+        myip,
+        port,
+        subtitles,
+        volume,
+        loop_playlist,
+        quiet,
     }
 }
 
@@ -226,8 +285,12 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     // 1. Setup Server (lazy init)
     let mut server = StreamServer::new();
-    let local_ip = get_local_ip().ok_or("Could not determine local IP")?;
-    let server_url_base = server.start(&local_ip.to_string()).await?;
+    let bind_ip = if let Some(ip) = &opts.myip {
+        ip.clone()
+    } else {
+        get_local_ip().ok_or("Could not determine local IP")?.to_string()
+    };
+    let server_url_base = server.start(&bind_ip, opts.port).await?;
     log::info!("Server started at {}", server_url_base);
 
     // Setup Torrent Manager
@@ -235,7 +298,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
 
     // 2. Discover or Target device
     let device = if let Some(ip_str) = opts.target_ip {
-        println!("Targeting specific IP: {}", ip_str);
+        if !opts.quiet { println!("Targeting specific IP: {}", ip_str); }
         CastDevice {
             ip: ip_str.parse().map_err(|_| "Invalid IP address provided")?,
             port: 8009,
@@ -244,7 +307,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
             uuid: "Unknown".to_string(),
         }
     } else {
-        println!("Searching for Cast devices...");
+        if !opts.quiet { println!("Searching for Cast devices..."); }
         let mut rx = discover_devices_async()?;
         let matching_device;
 
@@ -275,18 +338,23 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         }
         matching_device.ok_or("No matching device found")?
     };
-
-    println!("Found {}", device.friendly_name);
+    
+    if !opts.quiet { println!("Found {}", device.friendly_name); }
 
     // 3. Connect and Launch
-    println!("Connecting to {}...", device.ip);
+    if !opts.quiet { println!("Connecting to {}...", device.ip); }
     let mut client = CastClient::connect(&device.ip.to_string(), device.port).await?;
     let mut receiver_ctrl = ReceiverController::new(&client);
     client.connect_receiver().await?;
 
     let mut app = DefaultMediaReceiver::new(&client);
     app.launch().await?;
-    println!("Default Media Receiver launched.");
+    log::info!("Default Media Receiver launched.");
+
+    // Apply volume if specified
+    if let Some(vol) = opts.volume {
+        let _ = receiver_ctrl.set_volume(vol).await;
+    }
 
     // 4. Start TUI
     let tui = TuiController::new();
@@ -320,6 +388,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
         torrent_progress: None,
         torrent_file_name: None,
         torrent_handle: None,
+        subtitles: opts.subtitles.clone(),
     };
 
     // Load first item
@@ -599,7 +668,7 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                   "IDLE" => {
                                        current_status = PlaybackStatus::Idle;
                                        if s.idle_reason.as_deref() == Some("ERROR") {
-                                            println!("Watchdog: Detected Error status. Resuming...");
+                                            log::warn!("Watchdog: Detected Error status. Resuming...");
                                             if let Some(source) = app_state.source.clone() {
                                                 let curr_time = app_state.current_time;
                                                 if let Ok((is_tx, probe, offset)) = load_media(
@@ -624,20 +693,36 @@ async fn cast_media_playlist(opts: CastOptions) -> Result<(), Box<dyn Error>> {
                                                 }
                                             }
                                        } else if s.idle_reason.as_deref() == Some("FINISHED") {
-                                            app_state.current_media_idx += 1;
-                                             if let Some(source) = playlist.get(app_state.current_media_idx) {
-                                                 app_state.source = Some(source.clone());
-                                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
-                                                     app_state.is_transcoding = is_tx;
-                                                     app_state.seek_offset = offset;
-                                                     app_state.current_time = offset;
-                                                     app_state.last_known_time = offset;
-                                                     app_state.last_update_instant = std::time::Instant::now();
-                                                     app_state.total_duration = probe.duration;
-                                                     app_state.video_codec = probe.video_codec;
-                                                     app_state.audio_codec = probe.audio_codec;
+                                            let next_idx = app_state.current_media_idx + 1;
+                                            if next_idx < playlist.len() || opts.loop_playlist {
+                                                let target_idx = if next_idx < playlist.len() { next_idx } else { 0 };
+                                                if let Some(source) = playlist.get(target_idx) {
+                                                    app_state.current_media_idx = target_idx;
+                                                    app_state.source = Some(source.clone());
+                                                    match load_media(
+                                                        &app,
+                                                        &server,
+                                                        source,
+                                                        &server_url_base,
+                                                        0.0,
+                                                        &torrent_manager,
+                                                        &tui,
+                                                        &mut app_state,
+                                                    ).await {
+                                                        Ok((is_tx, probe, offset)) => {
+                                                             app_state.is_transcoding = is_tx;
+                                                             app_state.seek_offset = offset;
+                                                             app_state.current_time = offset;
+                                                             app_state.last_known_time = offset;
+                                                             app_state.last_update_instant = std::time::Instant::now();
+                                                             app_state.total_duration = probe.duration;
+                                                             app_state.video_codec = probe.video_codec;
+                                                             app_state.audio_codec = probe.audio_codec;
+                                                        },
+                                                        Err(e) => log::error!("Failed to load next media: {}", e),
+                                                    }
                                                 }
-                                             }
+                                            }
                                        }
                                   },
                                   _ => {}
@@ -853,11 +938,34 @@ async fn load_media(
         }
     };
 
+    // Handle Subtitles
+    let tracks = if let Some(sub_path_str) = &app_state.subtitles {
+        let sub_path = Path::new(sub_path_str);
+        if sub_path.exists() {
+             server.set_subtitle(sub_path.to_path_buf()).await;
+             use castru::protocol::media::MediaTrack;
+             Some(vec![MediaTrack {
+                 track_id: 1,
+                 track_type: "TEXT".to_string(),
+                 track_content_id: Some(format!("{}/subtitle", server_base)),
+                 track_content_type: Some("text/vtt".to_string()),
+                 name: Some("Subtitle".to_string()),
+                 language: Some("en".to_string()),
+                 subtype: Some("SUBTITLES".to_string()),
+             }])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let media_info = MediaInformation {
         content_id: url,
         stream_type: "BUFFERED".to_string(),
         content_type,
         metadata: None,
+        tracks,
     };
 
     let play_position = if is_transcoding {
@@ -866,7 +974,13 @@ async fn load_media(
         start_time as f32
     };
 
-    app.load(media_info, true, play_position).await?;
+    let active_tracks = if media_info.tracks.is_some() {
+        Some(vec![1])
+    } else {
+        None
+    };
+
+    app.load(media_info, true, play_position, active_tracks).await?;
     Ok((is_transcoding, probe, applied_seek_offset))
 }
 
@@ -973,4 +1087,55 @@ async fn launch_app(ip: &str, app_id: &str) -> Result<(), Box<dyn Error>> {
         println!("[{}] {}", event.namespace, event.payload);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cast_args_basic() {
+        let args = vec![
+            "cast".to_string(),
+            "--myip".to_string(),
+            "192.168.1.50".to_string(),
+            "--port".to_string(),
+            "8888".to_string(),
+            "--subtitles".to_string(),
+            "sub.vtt".to_string(),
+            "--volume".to_string(),
+            "0.5".to_string(),
+            "--loop".to_string(),
+            "--quiet".to_string(),
+            "video.mp4".to_string(),
+        ];
+
+        let opts = parse_cast_args(&args);
+
+        assert_eq!(opts.myip, Some("192.168.1.50".to_string()));
+        assert_eq!(opts.port, Some(8888));
+        assert_eq!(opts.subtitles, Some("sub.vtt".to_string()));
+        assert_eq!(opts.volume, Some(0.5));
+        assert!(opts.loop_playlist);
+        assert!(opts.quiet);
+        assert_eq!(opts.inputs.len(), 1);
+        assert_eq!(opts.inputs[0], "video.mp4");
+    }
+
+    #[test]
+    fn test_parse_cast_args_defaults() {
+        let args = vec![
+            "cast".to_string(),
+            "video.mp4".to_string(),
+        ];
+
+        let opts = parse_cast_args(&args);
+
+        assert_eq!(opts.myip, None);
+        assert_eq!(opts.port, None);
+        assert_eq!(opts.subtitles, None);
+        assert_eq!(opts.volume, None);
+        assert!(!opts.loop_playlist);
+        assert!(!opts.quiet);
+    }
 }

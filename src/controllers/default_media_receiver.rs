@@ -80,9 +80,10 @@ impl DefaultMediaReceiver {
         media: MediaInformation,
         autoplay: bool,
         current_time: f32,
+        active_track_ids: Option<Vec<i32>>,
     ) -> Result<(), CastError> {
         if let Some(controller) = &self.media_controller {
-            controller.load(media, autoplay, current_time).await
+            controller.load(media, autoplay, current_time, active_track_ids).await
         } else {
             Err(CastError::Protocol(
                 "MediaController not initialized. Call launch() first.".into(),

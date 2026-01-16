@@ -37,6 +37,8 @@ pub enum MediaRequest {
         autoplay: bool,
         #[serde(rename = "currentTime")]
         current_time: f32,
+        #[serde(rename = "activeTrackIds", skip_serializing_if = "Option::is_none")]
+        active_track_ids: Option<Vec<i32>>,
     },
     #[serde(rename = "PLAY")]
     Play {
@@ -71,6 +73,26 @@ pub struct MediaInformation {
     pub content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MediaMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<Vec<MediaTrack>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MediaTrack {
+    #[serde(rename = "trackId")]
+    pub track_id: i32, // Unique ID
+    #[serde(rename = "type")]
+    pub track_type: String, // TEXT, AUDIO, VIDEO
+    #[serde(rename = "trackContentId", skip_serializing_if = "Option::is_none")]
+    pub track_content_id: Option<String>, // URL of the track content
+    #[serde(rename = "trackContentType", skip_serializing_if = "Option::is_none")]
+    pub track_content_type: Option<String>, // MIME type
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(rename = "subtype", skip_serializing_if = "Option::is_none")]
+    pub subtype: Option<String>, // SUBTITLES, CAPTIONS, DESCRIPTIONS, CHAPTERS, METADATA
 }
 
 #[derive(Serialize, Deserialize, Debug)]
