@@ -18,6 +18,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - Rust 2021 + `librqbit` (existing), `tokio`. (012-fix-torrent-playback)
 - Rust 2021 + `tokio`, `ffmpeg` (external). (013-fix-transcode-seek-sync)
 - Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction). (019-reduce-dependencies)
+- Rust 2021 + `librqbit`, `tokio` (020-refine-torrent-streaming)
+- N/A (Temporary buffering on disk) (020-refine-torrent-streaming)
 
 - (001-castv2-protocol)
 
@@ -38,9 +40,10 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 020-refine-torrent-streaming: Added Rust 2021 + `librqbit`, `tokio`
 - 019-reduce-dependencies: Added Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction).
 - 018-castnow-feature-parity: Implemented advanced CLI options (myip, port, subtitles, volume, loop, quiet), SRT to VTT conversion, and torrent reliability fixes.
-- 017-torrent-streaming: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+- 006-castnow-tui: Finalized TUI polish with panic hooks for terminal restoration and title truncation.
 
 
 <!-- MANUAL ADDITIONS START -->

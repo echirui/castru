@@ -64,14 +64,14 @@
 ### Implementation for User Story 3
 
 - [x] T015 [US3] Verify `Drop` implementation in `src/controllers/tui.rs` restores cursor and raw mode
-- [ ] T016 [US3] Add `crossterm` panic hook or signal handler in `src/main.rs` to ensure terminal restoration on crash (Best Effort)
+- [x] T016 [US3] Add `crossterm` panic hook or signal handler in `src/main.rs` to ensure terminal restoration on crash (Best Effort)
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
 - [x] T017 [Polish] Add color coding to status state (Green=Playing, Yellow=Paused, etc.) in `src/controllers/tui.rs`
-- [ ] T018 [Polish] Handle long titles by truncating in `render_status_line`
+- [x] T018 [Polish] Handle long titles by truncating in `render_status_line`
 - [x] T019 [Doc] Update `README.md` with new keyboard shortcuts table
 
 ## Implementation Strategy

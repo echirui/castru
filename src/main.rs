@@ -881,6 +881,22 @@ async fn load_media(
             },
         ),
         MediaSource::Magnet(uri) => {
+            // Update TUI to show initialization
+            let init_state = TuiState {
+                status: "METADATA FETCHING".to_string(),
+                current_time: 0.0,
+                total_duration: None,
+                volume_level: app_state.volume_level,
+                is_muted: app_state.is_muted,
+                media_title: Some("Initializing Torrent...".to_string()),
+                video_codec: None,
+                audio_codec: None,
+                device_name: app_state.device_name.clone(),
+                animation_frame: app_state.animation_frame,
+                torrent_progress: None,
+            };
+            let _ = tui.draw(&init_state);
+
             let info = torrent_manager.start_magnet(uri).await?;
             app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state).await?);
             
@@ -1019,10 +1035,21 @@ async fn wait_for_torrent_download(
 
         app_state.torrent_progress = Some(pct);
 
+        // if app_state.total_duration.is_none() && downloaded > 2 * 1024 * 1024 {
+        //      // Try to probe early if we have some data (heuristic 2MB for header)
+        //      if let Ok(p) = probe_media(&info.path).await {
+        //          if let Some(d) = p.duration {
+        //               app_state.total_duration = Some(d);
+        //               app_state.video_codec = p.video_codec;
+        //               app_state.audio_codec = p.audio_codec;
+        //          }
+        //      }
+        // }
+
         let tui_state = TuiState {
             status: "BUFFERING (TORRENT)".to_string(),
             current_time: 0.0,
-            total_duration: None,
+            total_duration: app_state.total_duration.map(|d| d as f32),
             volume_level: app_state.volume_level,
             is_muted: app_state.is_muted,
             media_title: app_state.torrent_file_name.clone(),

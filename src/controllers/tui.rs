@@ -174,7 +174,13 @@ impl TuiController {
 
         // 3. Title
 
-        let title_str = format!(" {} ", state.media_title.as_deref().unwrap_or("No Media"));
+        let max_width = (cols as usize).saturating_sub(4);
+        let raw_title = state.media_title.as_deref().unwrap_or("No Media");
+        let title_str = if raw_title.len() > max_width {
+             format!(" {}... ", &raw_title[..max_width.saturating_sub(3)])
+        } else {
+            format!(" {} ", raw_title)
+        };
 
         let t_y = cy.saturating_sub(2);
 
