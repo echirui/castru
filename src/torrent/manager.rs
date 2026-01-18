@@ -15,7 +15,11 @@ impl TorrentManager {
     pub async fn new(config: TorrentConfig) -> Result<Self, TorrentError> {
         let output_dir = config
             .download_dir
-            .unwrap_or_else(|| std::env::temp_dir().join("castru_torrent"));
+            .unwrap_or_else(|| {
+                let mut path = std::env::temp_dir();
+                path.push(format!("castru_torrent_{}", uuid::Uuid::new_v4()));
+                path
+            });
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(TorrentError::Io)?;
@@ -89,9 +93,12 @@ impl TorrentManager {
         &self,
         handle: Arc<ManagedTorrent>,
     ) -> Result<super::TorrentStreamInfo, TorrentError> {
-        handle
-            .wait_until_initialized()
+        let init_future = handle.wait_until_initialized();
+        let timeout_duration = std::time::Duration::from_secs(30); // 30s timeout for metadata
+
+        tokio::time::timeout(timeout_duration, init_future)
             .await
+            .map_err(|_| TorrentError::Engine("Timeout waiting for torrent metadata".into()))?
             .map_err(|e| TorrentError::Engine(e.to_string()))?;
 
         let metadata_guard = handle.metadata.load();
@@ -166,6 +173,20 @@ impl TorrentManager {
             piece_length: info.piece_length as u64,
             file_idx,
         })
+    }
+
+    pub fn cleanup(&self) {
+        if self.output_dir.exists() {
+             let _ = std::fs::remove_dir_all(&self.output_dir);
+        }
+    }
+}
+
+impl Drop for TorrentManager {
+    fn drop(&mut self) {
+        if self.output_dir.exists() {
+             let _ = std::fs::remove_dir_all(&self.output_dir);
+        }
     }
 }
 
