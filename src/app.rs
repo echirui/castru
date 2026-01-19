@@ -790,7 +790,7 @@ async fn load_media(
             let _ = tui.draw(&init_state);
 
             let info = torrent_manager.start_magnet(uri).await?;
-            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state).await?);
+            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state, probe_tx.clone()).await?);
             
             server
                 .set_source(StreamSource::Growing {
@@ -818,7 +818,7 @@ async fn load_media(
         }
         MediaSource::TorrentFile(path_str) => {
             let info = torrent_manager.start_torrent_file(path_str).await?;
-            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state).await?);
+            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state, probe_tx.clone()).await?);
 
             server
                 .set_source(StreamSource::Growing {

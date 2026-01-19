@@ -72,36 +72,7 @@ pub async fn probe_media(path: &Path) -> Result<MediaProbeResult, CastError> {
         ));
     }
 
-    let parsed: FFProbeOutput = serde_json::from_slice(&output.stdout)
-        .map_err(|e| CastError::Probe(format!("Failed to parse ffprobe output: {}", e)))?;
-
-    let mut video_codec = None;
-    let mut video_profile = None;
-    let mut pix_fmt = None;
-    let mut audio_codec = None;
-
-    for stream in parsed.streams {
-        if stream.codec_type == "video" && video_codec.is_none() {
-            video_codec = Some(stream.codec_name);
-            video_profile = stream.profile;
-            pix_fmt = stream.pix_fmt;
-        } else if stream.codec_type == "audio" && audio_codec.is_none() {
-            audio_codec = Some(stream.codec_name);
-        }
-    }
-
-    let duration = parsed
-        .format
-        .and_then(|f| f.duration)
-        .and_then(|d| d.parse::<f64>().ok());
-
-    Ok(MediaProbeResult {
-        video_codec,
-        video_profile,
-        pix_fmt,
-        audio_codec,
-        duration,
-    })
+    parse_ffprobe_output(&output.stdout)
 }
 
 pub fn needs_transcoding(probe: &MediaProbeResult) -> bool {
