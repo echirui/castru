@@ -228,7 +228,7 @@ impl StreamServer {
 
         tokio::spawn(async move {
             if let Ok(mut file) = tokio::fs::File::create(&path_clone).await {
-                let mut buf = [0u8; 1024 * 1024];
+                let mut buf = vec![0u8; 1024 * 1024];
                 loop {
                     if done_flag.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -363,7 +363,7 @@ async fn handle_connection(
         socket.write_all(header.as_bytes()).await?;
 
         let mut file = tokio::fs::File::open(&path).await?;
-        let mut pipe_buf = [0u8; 1024 * 1024];
+        let mut pipe_buf = vec![0u8; 1024 * 1024];
         loop {
             match file.read(&mut pipe_buf).await {
                 Ok(0) => {
