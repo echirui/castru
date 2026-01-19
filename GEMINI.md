@@ -22,6 +22,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - N/A (Temporary buffering on disk) (020-refine-torrent-streaming)
 - Rust 2021 Edition + `tokio` (async runtime), `prost` (protobuf), `rustls` (TLS). *Constraint*: No new dependencies allowed without strong justification. (021-optimize-codebase)
 - N/A (Feature focuses on code quality) (021-optimize-codebase)
+- Rust 2021 Edition + `tokio` (async runtime), `librqbit` (torrent), `ffmpeg` (via `std::process::Command` for probing). (022-show-max-duration)
+- N/A (Temporary file storage handled by `librqbit`). (022-show-max-duration)
 
 - (001-castv2-protocol)
 
@@ -42,9 +44,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 022-show-max-duration: Added Rust 2021 Edition + `tokio` (async runtime), `librqbit` (torrent), `ffmpeg` (via `std::process::Command` for probing).
 - 021-optimize-codebase: Added Rust 2021 Edition + `tokio` (async runtime), `prost` (protobuf), `rustls` (TLS). *Constraint*: No new dependencies allowed without strong justification.
 - 020-refine-torrent-streaming: Added Rust 2021 + `librqbit`, `tokio`
-- 019-reduce-dependencies: Added Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction).
 
 
 <!-- MANUAL ADDITIONS START -->
