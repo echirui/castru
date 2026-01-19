@@ -177,3 +177,68 @@ pub fn spawn_ffmpeg(config: &TranscodeConfig) -> Result<TranscodingPipeline, Cas
 
     Ok(TranscodingPipeline { process, stdout })
 }
+
+fn parse_ffprobe_output(output: &[u8]) -> Result<MediaProbeResult, CastError> {
+    let parsed: FFProbeOutput = serde_json::from_slice(output)
+        .map_err(|e| CastError::Probe(format!("Failed to parse ffprobe output: {}", e)))?;
+
+    let mut video_codec = None;
+    let mut video_profile = None;
+    let mut pix_fmt = None;
+    let mut audio_codec = None;
+
+    for stream in parsed.streams {
+        if stream.codec_type == "video" && video_codec.is_none() {
+            video_codec = Some(stream.codec_name);
+            video_profile = stream.profile;
+            pix_fmt = stream.pix_fmt;
+        } else if stream.codec_type == "audio" && audio_codec.is_none() {
+            audio_codec = Some(stream.codec_name);
+        }
+    }
+
+    let duration = parsed
+        .format
+        .and_then(|f| f.duration)
+        .and_then(|d| d.parse::<f64>().ok());
+
+    Ok(MediaProbeResult {
+        video_codec,
+        video_profile,
+        pix_fmt,
+        audio_codec,
+        duration,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ffprobe_output() {
+        let json_output = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "profile": "High",
+                    "pix_fmt": "yuv420p"
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac"
+                }
+            ],
+            "format": {
+                "duration": "123.456"
+            }
+        }"#;
+
+        let result = parse_ffprobe_output(json_output.as_bytes()).unwrap();
+
+        assert_eq!(result.video_codec, Some("h264".to_string()));
+        assert_eq!(result.audio_codec, Some("aac".to_string()));
+        assert_eq!(result.duration, Some(123.456));
+    }
+}

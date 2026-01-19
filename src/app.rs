@@ -19,6 +19,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use librqbit::ManagedTorrent;
 
+enum InternalEvent {
+    ProbeCompleted {
+        duration: Option<f64>,
+        video_codec: Option<String>,
+        audio_codec: Option<String>,
+    },
+}
+
+use tokio::sync::mpsc;
+
 struct AppState {
     is_transcoding: bool,
     seek_offset: f64,
@@ -183,6 +193,9 @@ impl CastNowCore {
             subtitles: self.config.subtitles.clone(),
         };
 
+        let mut events = client.events();
+        let (probe_tx, mut probe_rx) = mpsc::channel(16);
+
         // Load first item
         if let Some(source) = playlist.front() {
             app_state.current_media_idx = 0;
@@ -196,6 +209,7 @@ impl CastNowCore {
                 &torrent_manager,
                 &tui,
                 &mut app_state,
+                Some(probe_tx.clone()),
             )
             .await
             {
@@ -214,19 +228,33 @@ impl CastNowCore {
         }
 
         // Event Loop
-        let mut events = client.events();
         let mut animation_interval = tokio::time::interval(Duration::from_millis(150));
         let mut watchdog_interval = tokio::time::interval(Duration::from_secs(1));
 
         loop {
             tokio::select! {
+                Some(event) = probe_rx.recv() => {
+                    match event {
+                        InternalEvent::ProbeCompleted { duration, video_codec, audio_codec } => {
+                            if let Some(d) = duration {
+                                app_state.total_duration = Some(d);
+                            }
+                            if video_codec.is_some() {
+                                app_state.video_codec = video_codec;
+                            }
+                            if audio_codec.is_some() {
+                                app_state.audio_codec = audio_codec;
+                            }
+                        }
+                    }
+                }
                 _ = watchdog_interval.tick() => {
                     // Watchdog: If playing but time hasn't advanced for X seconds, resume.
                     if matches!(current_status, PlaybackStatus::Playing)
                         && app_state.last_update_instant.elapsed() > Duration::from_secs(WATCHDOG_TIMEOUT_SEC) {
                             if let Some(source) = app_state.source.clone() {
                                 let curr_time = app_state.current_time;
-                                match load_media(&app, &server, &source, &server_url_base, curr_time, &torrent_manager, &tui, &mut app_state).await {
+                                match load_media(&app, &server, &source, &server_url_base, curr_time, &torrent_manager, &tui, &mut app_state, Some(probe_tx.clone())).await {
                                     Ok((is_tx, probe, offset)) => {
                                         app_state.is_transcoding = is_tx;
                                         app_state.seek_offset = offset;
@@ -273,7 +301,7 @@ impl CastNowCore {
                             app_state.current_media_idx += 1;
                              if let Some(source) = playlist.get(app_state.current_media_idx) {
                                  app_state.source = Some(source.clone());
-                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
+                                if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state, Some(probe_tx.clone())).await {
                                      app_state.is_transcoding = is_tx;
                                      app_state.seek_offset = offset;
                                      app_state.current_time = offset;
@@ -292,7 +320,7 @@ impl CastNowCore {
                                 app_state.current_media_idx -= 1;
                                  if let Some(source) = playlist.get(app_state.current_media_idx) {
                                     app_state.source = Some(source.clone());
-                                    if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state).await {
+                                    if let Ok((is_tx, probe, offset)) = load_media(&app, &server, source, &server_url_base, 0.0, &torrent_manager, &tui, &mut app_state, Some(probe_tx.clone())).await {
                                          app_state.is_transcoding = is_tx;
                                          app_state.seek_offset = offset;
                                          app_state.current_time = offset;
@@ -309,7 +337,7 @@ impl CastNowCore {
                              let new_time = app_state.current_time + s as f64;
                              if app_state.is_transcoding {
                                  if let Some(src) = app_state.source.clone() {
-                                     match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state).await {
+                                     match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state, Some(probe_tx.clone())).await {
                                           Ok((is_tx, probe, offset)) => {
                                              app_state.is_transcoding = is_tx;
                                              app_state.seek_offset = offset;
@@ -334,7 +362,7 @@ impl CastNowCore {
                              let new_time = (app_state.current_time - s as f64).max(0.0);
                              if app_state.is_transcoding {
                                  if let Some(src) = app_state.source.clone() {
-                                     match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state).await {
+                                     match load_media(&app, &server, &src, &server_url_base, new_time, &torrent_manager, &tui, &mut app_state, Some(probe_tx.clone())).await {
                                           Ok((is_tx, probe, offset)) => {
                                              app_state.is_transcoding = is_tx;
                                              app_state.seek_offset = offset;
@@ -461,19 +489,19 @@ impl CastNowCore {
                                                 log::warn!("Watchdog: Detected Error status. Resuming...");
                                                 if let Some(source) = app_state.source.clone() {
                                                     let curr_time = app_state.current_time;
-                                                    if let Ok((is_tx, probe, offset)) = load_media(
-                                                        &app,
-                                                        &server,
-                                                        &source,
-                                                        &server_url_base,
-                                                        curr_time,
-                                                        &torrent_manager,
-                                                        &tui,
-                                                        &mut app_state,
-                                                    )
-                                                    .await
-                                                    {
-                                                         app_state.is_transcoding = is_tx;
+                                                                                                    if let Ok((is_tx, probe, offset)) = load_media(
+                                                                                                        &app,
+                                                                                                        &server,
+                                                                                                        &source,
+                                                                                                        &server_url_base,
+                                                                                                        curr_time,
+                                                                                                        &torrent_manager,
+                                                                                                        &tui,
+                                                                                                        &mut app_state,
+                                                                                                        Some(probe_tx.clone()),
+                                                                                                    )
+                                                                                                    .await
+                                                                                                    {                                                         app_state.is_transcoding = is_tx;
                                                          app_state.seek_offset = offset;
                                                          app_state.last_known_time = app_state.current_time;
                                                          app_state.last_update_instant = std::time::Instant::now();
@@ -498,6 +526,7 @@ impl CastNowCore {
                                                             &torrent_manager,
                                                             &tui,
                                                             &mut app_state,
+                                                            Some(probe_tx.clone()),
                                                         ).await {
                                                             Ok((is_tx, probe, offset)) => {
                                                                  app_state.is_transcoding = is_tx;
@@ -676,6 +705,7 @@ async fn load_media(
     torrent_manager: &TorrentManager,
     tui: &TuiController,
     app_state: &mut AppState,
+    probe_tx: Option<mpsc::Sender<InternalEvent>>,
 ) -> Result<(bool, MediaProbeResult, f64), Box<dyn Error>> {
     // ... Copy implementation from main.rs ...
     // Note: I already copied it above but didn't paste it all because of size.
@@ -864,6 +894,7 @@ async fn wait_for_torrent_download(
     info: &TorrentStreamInfo,
     tui: &TuiController,
     app_state: &mut AppState,
+    probe_tx: Option<mpsc::Sender<InternalEvent>>,
 ) -> Result<Arc<ManagedTorrent>, Box<dyn Error>> {
     app_state.torrent_file_name = Some(
         info.path
@@ -874,6 +905,7 @@ async fn wait_for_torrent_download(
     );
     let mut last_progress = 0.0;
     let mut stall_start = std::time::Instant::now();
+    let mut probing_started = false;
 
     loop {
         let stats = info.handle.stats();
@@ -883,6 +915,29 @@ async fn wait_for_torrent_download(
         } else {
             0.0
         };
+
+        // Start probing if downloaded enough bytes (e.g., > 5MB) and not already started
+        if !probing_started && downloaded > 5 * 1024 * 1024 {
+            if let Some(tx) = &probe_tx {
+                probing_started = true;
+                let tx = tx.clone();
+                let path = info.path.clone();
+                tokio::spawn(async move {
+                    // Wait a bit more to ensure header is flushed to disk
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    match probe_media(&path).await {
+                        Ok(probe) => {
+                            let _ = tx.send(InternalEvent::ProbeCompleted {
+                                duration: probe.duration,
+                                video_codec: probe.video_codec,
+                                audio_codec: probe.audio_codec,
+                            }).await;
+                        }
+                        Err(e) => eprintln!("Background probe failed: {}", e),
+                    }
+                });
+            }
+        }
 
         if pct > last_progress {
             last_progress = pct;
