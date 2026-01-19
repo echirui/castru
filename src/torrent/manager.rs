@@ -161,8 +161,8 @@ impl TorrentManager {
         let full_path = self.output_dir.join(base_name.as_ref()).join(rel_path);
 
         let mut file_offset = 0;
-        for i in 0..file_idx {
-            file_offset += files[i].length;
+        for file in files.iter().take(file_idx) {
+            file_offset += file.length;
         }
 
         Ok(super::TorrentStreamInfo {
@@ -196,4 +196,44 @@ fn is_video_file(path: &str) -> bool {
         || lower.ends_with(".mkv")
         || lower.ends_with(".avi")
         || lower.ends_with(".mov")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_video_file() {
+        assert!(is_video_file("movie.mp4"));
+        assert!(is_video_file("Show.MKV"));
+        assert!(is_video_file("clip.avi"));
+        assert!(!is_video_file("image.jpg"));
+        assert!(!is_video_file("document.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_torrent_manager_lifecycle() {
+        let config = TorrentConfig {
+            download_dir: None,
+            keep_files: false,
+            listen_port: None,
+        };
+        let manager = TorrentManager::new(config).await.expect("Failed to create manager");
+        let path = manager.output_dir.clone();
+        
+        assert!(path.exists());
+        assert!(path.to_string_lossy().contains("castru_torrent_"));
+
+        // Drop manager explicitly to test cleanup
+        drop(manager);
+        
+        // Cleanup is best-effort in Drop, usually sync fs calls. 
+        // We verify it doesn't panic. 
+        // Note: fs::remove_dir_all in Drop might fail if files are open, but here it's empty.
+        // Also it might take a moment.
+        // Ideally we check !path.exists(), but that depends on implementation details of Drop logic.
+        // The implementation uses std::fs::remove_dir_all, which is blocking.
+        // So path should be gone.
+        assert!(!path.exists());
+    }
 }

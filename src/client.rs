@@ -282,4 +282,57 @@ impl CastClient {
     pub fn events(&self) -> broadcast::Receiver<CastEvent> {
         self.event_tx.subscribe()
     }
+
+    #[cfg(test)]
+    pub fn new_mock() -> (Self, mpsc::Receiver<CastMessage>) {
+        let (command_tx, command_rx) = mpsc::channel(32);
+        let (event_tx, _) = broadcast::channel(32);
+        (
+            Self {
+                command_tx,
+                event_tx,
+            },
+            command_rx,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::receiver::ReceiverRequest;
+
+    #[tokio::test]
+    async fn test_client_send_connection_message() {
+        let (client, mut rx) = CastClient::new_mock();
+        client.connect_receiver().await.unwrap();
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg.namespace, connection::NAMESPACE);
+        assert!(msg.payload_utf8.unwrap().contains("\"type\":\"CONNECT\""));
+    }
+
+    #[tokio::test]
+    async fn test_client_launch_app() {
+        let (client, mut rx) = CastClient::new_mock();
+        client.launch_app("CC1AD845").await.unwrap();
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg.namespace, receiver::NAMESPACE);
+        let payload = msg.payload_utf8.unwrap();
+        assert!(payload.contains("\"type\":\"LAUNCH\""));
+        assert!(payload.contains("\"appId\":\"CC1AD845\""));
+    }
+
+    #[tokio::test]
+    async fn test_client_set_volume() {
+        let (client, mut rx) = CastClient::new_mock();
+        client.set_volume(0.5).await.unwrap();
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg.namespace, receiver::NAMESPACE);
+        let payload = msg.payload_utf8.unwrap();
+        assert!(payload.contains("\"type\":\"SET_VOLUME\""));
+        assert!(payload.contains("\"level\":0.5"));
+    }
 }

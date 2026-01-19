@@ -11,21 +11,13 @@ pub use manager::TorrentManager;
 pub use stream::GrowingFile;
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct TorrentConfig {
     pub download_dir: Option<PathBuf>,
     pub keep_files: bool,
     pub listen_port: Option<u16>,
 }
 
-impl Default for TorrentConfig {
-    fn default() -> Self {
-        Self {
-            download_dir: None,
-            keep_files: false,
-            listen_port: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum TorrentState {

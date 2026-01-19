@@ -123,6 +123,31 @@ Castru also provides a command-line interface for common tasks:
   cargo run -- cast --name "Living Room TV" video.mp4
   ```
 
+## Development
+
+### Testing
+
+Run the test suite (unit and integration tests):
+
+```bash
+cargo test
+```
+
+To generate code coverage reports (requires `cargo-llvm-cov`):
+
+```bash
+cargo install cargo-llvm-cov
+cargo llvm-cov
+```
+
+### Benchmarking
+
+To run performance benchmarks (requires `criterion`):
+
+```bash
+cargo bench
+```
+
 ## License
 
 MIT

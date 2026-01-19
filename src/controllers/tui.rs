@@ -265,7 +265,7 @@ impl TuiController {
                  let dl_y = cy;
                  let dl_x = (cols as usize).saturating_sub(dl_text.len()) / 2;
                  execute!(stdout, 
-                     MoveTo(dl_x as u16, dl_y as u16), 
+                     MoveTo(dl_x as u16, dl_y), 
                      SetForegroundColor(Color::Yellow),
                      Print(dl_text),
                      ResetColor
@@ -276,7 +276,7 @@ impl TuiController {
                  let dl_bar_y = dl_y + 1;
                  let dl_bar = render_progress_bar(pct, Some(100.0), dl_bar_width);
                  execute!(stdout, 
-                     MoveTo(dl_bar_x as u16, dl_bar_y as u16), 
+                     MoveTo(dl_bar_x as u16, dl_bar_y), 
                      SetForegroundColor(Color::Yellow),
                      Print(format!(" {} ", dl_bar)),
                      ResetColor
@@ -288,7 +288,7 @@ impl TuiController {
         if !progress_shown {
             // Normal seekbar rendering
             execute!(stdout, 
-                MoveTo(bar_x as u16, bar_y as u16), 
+                MoveTo(bar_x as u16, bar_y), 
                 SetForegroundColor(Color::White),
                 Print(format!(" {} ", progress_bar)),
                 ResetColor

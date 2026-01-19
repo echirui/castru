@@ -228,7 +228,7 @@ impl StreamServer {
 
         tokio::spawn(async move {
             if let Ok(mut file) = tokio::fs::File::create(&path_clone).await {
-                let mut buf = [0u8; 65536];
+                let mut buf = [0u8; 1024 * 1024];
                 loop {
                     if done_flag.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -236,7 +236,7 @@ impl StreamServer {
                     match stdout.read(&mut buf).await {
                         Ok(0) => break,
                         Ok(n) => {
-                            if let Err(_) = file.write_all(&buf[..n]).await {
+                            if (file.write_all(&buf[..n]).await).is_err() {
                                 break;
                             }
                         }
@@ -298,8 +298,8 @@ async fn handle_connection(
         };
         if let Some(path) = sub_path {
             let status_line = "HTTP/1.1 200 OK";
-            let is_vtt = path.extension().map_or(false, |e| e == "vtt");
-            let is_srt = path.extension().map_or(false, |e| e == "srt");
+            let is_vtt = path.extension().is_some_and(|e| e == "vtt");
+            let is_srt = path.extension().is_some_and(|e| e == "srt");
 
             if is_srt {
                  // Convert SRT to VTT
@@ -363,7 +363,7 @@ async fn handle_connection(
         socket.write_all(header.as_bytes()).await?;
 
         let mut file = tokio::fs::File::open(&path).await?;
-        let mut pipe_buf = [0u8; 65536];
+        let mut pipe_buf = [0u8; 1024 * 1024];
         loop {
             match file.read(&mut pipe_buf).await {
                 Ok(0) => {
@@ -609,4 +609,37 @@ mod tests {
         let mut server2 = StreamServer::new();
         let url_res2 = server2.start(local_ip, Some(0)).await;
         assert!(url_res2.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_server_state_management() {
+        let server = StreamServer::new();
+
+        // Test set_file
+        let path = PathBuf::from("test_video.mp4");
+        server.set_file(path.clone()).await;
+        
+        {
+            let source_guard = server.source.lock().unwrap();
+            match source_guard.as_ref() {
+                Some(StreamSource::Static(p)) => assert_eq!(*p, path),
+                _ => panic!("Expected Static source"),
+            }
+        }
+
+        // Test set_subtitle
+        let sub_path = PathBuf::from("test.vtt");
+        server.set_subtitle(sub_path.clone()).await;
+        
+        {
+            let sub_guard = server.subtitle_path.lock().unwrap();
+            assert_eq!(*sub_guard, Some(sub_path));
+        }
+
+        // Test clearing logic (set_source should clear subtitle)
+        server.set_source(StreamSource::Static(PathBuf::from("new.mp4"))).await;
+        {
+             let sub_guard = server.subtitle_path.lock().unwrap();
+             assert!(sub_guard.is_none());
+        }
     }

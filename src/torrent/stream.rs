@@ -51,7 +51,7 @@ impl AsyncRead for GrowingFile {
 
         let file = match self.file.as_mut() {
             Some(f) => f,
-            None => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "File not open"))),
+            None => return Poll::Ready(Err(io::Error::other("File not open"))),
         };
 
         let file_pin = Pin::new(file);
@@ -65,18 +65,16 @@ impl AsyncRead for GrowingFile {
                 if bytes_read > 0 {
                     self.position += bytes_read as u64;
                     Poll::Ready(Ok(()))
+                } else if self.position >= self.total_size {
+                    Poll::Ready(Ok(()))
                 } else {
-                    if self.position >= self.total_size {
-                        Poll::Ready(Ok(()))
-                    } else {
-                        // EOF from file but we expect more data
-                        let waker = cx.waker().clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            waker.wake();
-                        });
-                        Poll::Pending
-                    }
+                    // EOF from file but we expect more data
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        waker.wake();
+                    });
+                    Poll::Pending
                 }
             }
             other => other,
@@ -89,7 +87,7 @@ impl AsyncSeek for GrowingFile {
         if let Some(file) = self.file.as_mut() {
             Pin::new(file).start_seek(position)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "File not open"))
+            Err(io::Error::other("File not open"))
         }
     }
 
@@ -103,7 +101,7 @@ impl AsyncSeek for GrowingFile {
                 other => other,
             }
         } else {
-            Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "File not open")))
+            Poll::Ready(Err(io::Error::other("File not open")))
         }
     }
 }
