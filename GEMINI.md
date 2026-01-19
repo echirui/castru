@@ -20,6 +20,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-13
 - Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction). (019-reduce-dependencies)
 - Rust 2021 + `librqbit`, `tokio` (020-refine-torrent-streaming)
 - N/A (Temporary buffering on disk) (020-refine-torrent-streaming)
+- Rust 2021 Edition + `tokio` (async runtime), `prost` (protobuf), `rustls` (TLS). *Constraint*: No new dependencies allowed without strong justification. (021-optimize-codebase)
+- N/A (Feature focuses on code quality) (021-optimize-codebase)
 
 - (001-castv2-protocol)
 
@@ -40,10 +42,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 021-optimize-codebase: Added Rust 2021 Edition + `tokio` (async runtime), `prost` (protobuf), `rustls` (TLS). *Constraint*: No new dependencies allowed without strong justification.
 - 020-refine-torrent-streaming: Added Rust 2021 + `librqbit`, `tokio`
 - 019-reduce-dependencies: Added Rust 2021 + `tokio`, `prost`, `rustls`, `serde`, `crossterm`, `librqbit` (Remaining after reduction).
-- 018-castnow-feature-parity: Implemented advanced CLI options (myip, port, subtitles, volume, loop, quiet), SRT to VTT conversion, and torrent reliability fixes.
-- 006-castnow-tui: Finalized TUI polish with panic hooks for terminal restoration and title truncation.
 
 
 <!-- MANUAL ADDITIONS START -->

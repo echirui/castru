@@ -1,5 +1,7 @@
+pub mod app;
 pub mod client;
 pub mod codec;
+pub mod config;
 pub mod controllers;
 pub mod discovery;
 pub mod error;

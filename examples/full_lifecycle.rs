@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         stream_type: "BUFFERED".to_string(),
         content_type: "video/mp4".to_string(),
         metadata: None,
+        tracks: None,
     };
 
     println!("Loading media: {}", media_url);

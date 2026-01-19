@@ -33,3 +33,15 @@ features = ["dangerous_configuration"]
 [build-dependencies]
 prost-build = "0.12"
 protoc-bin-vendored = "3.0"
+
+[dev-dependencies]
+criterion = { version = "0.8.1", features = ["async_tokio"] }
+rcgen = "0.14.6"
+
+[[bench]]
+name = "baseline"
+harness = false
+
+[[bench]]
+name = "transcode_throughput"
+harness = false
