@@ -29,8 +29,8 @@
 ## Phase 4: Polish
 *Goal: Robustness and cleanup.*
 
-- [ ] T008 Implement logic to prevent repeated probe attempts if the first one fails or if duration is already found
-- [ ] T009 Run `cargo clippy` and fix any new warnings
+- [x] T008 Implement logic to prevent repeated probe attempts if the first one fails or if duration is already found
+- [x] T009 Run `cargo clippy` and fix any new warnings
 
 ## Dependencies
 
