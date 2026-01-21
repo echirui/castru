@@ -38,6 +38,7 @@ struct AppState {
     total_duration: Option<f64>,
     volume_level: Option<f32>,
     is_muted: bool,
+    user_paused: bool,
     source: Option<MediaSource>,
     current_media_idx: usize,
     video_codec: Option<String>,
@@ -54,6 +55,8 @@ struct AppState {
 const TORRENT_BUFFER_PCT_THRESHOLD: f32 = 3.0;
 const TORRENT_BUFFER_SIZE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB
 const WATCHDOG_TIMEOUT_SEC: u64 = 30;
+const BUFFER_UNDERRUN_THRESHOLD: f32 = 0.5; // percent
+const BUFFER_RESUME_THRESHOLD: f32 = 2.0; // percent
 
 pub struct CastNowCore {
     config: Config,
@@ -180,6 +183,7 @@ impl CastNowCore {
             total_duration: None,
             volume_level: Some(1.0),
             is_muted: false,
+            user_paused: false,
             source: None,
             current_media_idx: 0,
             video_codec: None,
@@ -278,11 +282,13 @@ impl CastNowCore {
                                 PlaybackStatus::Playing | PlaybackStatus::Buffering => {
                                     let _ = app.pause(sid).await;
                                     current_status = PlaybackStatus::Paused;
+                                    app_state.user_paused = true;
                                 },
                                 _ => {
                                     let _ = app.play(sid).await;
                                     current_status = PlaybackStatus::Playing;
                                     app_state.last_update_instant = std::time::Instant::now();
+                                    app_state.user_paused = false;
                                 }
                             }
                         },
@@ -290,12 +296,14 @@ impl CastNowCore {
                             let sid = app_state.media_session_id.unwrap_or(1);
                             let _ = app.pause(sid).await;
                             current_status = PlaybackStatus::Paused;
+                            app_state.user_paused = true;
                         },
                         TuiCommand::Play => {
                              let sid = app_state.media_session_id.unwrap_or(1);
                              let _ = app.play(sid).await;
                              current_status = PlaybackStatus::Playing;
                              app_state.last_update_instant = std::time::Instant::now();
+                             app_state.user_paused = false;
                         },
                         TuiCommand::Next => {
                             app_state.current_media_idx += 1;
@@ -597,7 +605,30 @@ impl CastNowCore {
                          let stats = handle.stats();
                          let total = stats.total_bytes;
                          if total > 0 {
-                             app_state.torrent_progress = Some((stats.progress_bytes as f32 / total as f32) * 100.0);
+                             let pct = (stats.progress_bytes as f32 / total as f32) * 100.0;
+                             app_state.torrent_progress = Some(pct);
+
+                             // Auto-buffering logic
+                             if let Some(total_dur) = app_state.total_duration {
+                                 if total_dur > 0.0 && !app_state.user_paused {
+                                     let played_pct = (app_state.current_time / total_dur) * 100.0;
+                                     let margin = pct - played_pct as f32;
+                                     let sid = app_state.media_session_id.unwrap_or(1);
+
+                                     if margin < BUFFER_UNDERRUN_THRESHOLD && pct < 100.0 {
+                                         if matches!(current_status, PlaybackStatus::Playing) {
+                                             let _ = app.pause(sid).await;
+                                             current_status = PlaybackStatus::Buffering;
+                                         }
+                                     } else if margin > BUFFER_RESUME_THRESHOLD || pct >= 100.0 {
+                                         if matches!(current_status, PlaybackStatus::Buffering) {
+                                             let _ = app.play(sid).await;
+                                             current_status = PlaybackStatus::Playing;
+                                             app_state.last_update_instant = std::time::Instant::now();
+                                         }
+                                     }
+                                 }
+                             }
                          }
                      }
 
@@ -790,7 +821,7 @@ async fn load_media(
             let _ = tui.draw(&init_state);
 
             let info = torrent_manager.start_magnet(uri).await?;
-            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state).await?);
+            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state, probe_tx.clone()).await?);
             
             server
                 .set_source(StreamSource::Growing {
@@ -818,7 +849,7 @@ async fn load_media(
         }
         MediaSource::TorrentFile(path_str) => {
             let info = torrent_manager.start_torrent_file(path_str).await?;
-            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state).await?);
+            app_state.torrent_handle = Some(wait_for_torrent_download(&info, tui, app_state, probe_tx.clone()).await?);
 
             server
                 .set_source(StreamSource::Growing {
