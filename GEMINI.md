@@ -46,7 +46,6 @@ tests/
 ## Recent Changes
 - 022-show-max-duration: Added Rust 2021 Edition + `tokio` (async runtime), `librqbit` (torrent), `ffmpeg` (via `std::process::Command` for probing).
 - 021-optimize-codebase: Added Rust 2021 Edition + `tokio` (async runtime), `prost` (protobuf), `rustls` (TLS). *Constraint*: No new dependencies allowed without strong justification.
-- 020-refine-torrent-streaming: Added Rust 2021 + `librqbit`, `tokio`
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -56,4 +55,5 @@ tests/
 - 023-auto-resume-buffering: Implemented auto-pause/resume logic based on buffer thresholds.
 - 024-show-seek-and-download-bars: Implemented dual seek/download bar in TUI with dynamic layout.
 - 007-visual-tui: Implemented full visual TUI with ascii projector animation.
+- 026-replace-paused-with-sleep: Removed static PAUSED state, replacing it with a WAITING state that auto-resumes after 10 seconds.
 <!-- MANUAL ADDITIONS END -->
