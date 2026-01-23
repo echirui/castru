@@ -128,6 +128,7 @@ impl TuiController {
             "PAUSED" => Color::Yellow,
             "BUFFERING" => Color::Blue,
             "RECONNECTING" => Color::Magenta,
+            "WAITING" => Color::Magenta,
             _ => Color::Grey,
         };
 
@@ -255,7 +256,7 @@ impl TuiController {
 
         // Draw Seekbar
         execute!(stdout,
-            MoveTo(bar_x as u16, bar_y as u16), 
+            MoveTo(bar_x as u16, bar_y), 
             SetForegroundColor(Color::White),
             Print(format!(" PLAY {} ", progress_bar)),
             ResetColor
@@ -267,7 +268,7 @@ impl TuiController {
              let dl_bar_y = bar_y + extra_y;
              let dl_bar = render_progress_bar(pct, Some(100.0), bar_width);
              execute!(stdout, 
-                 MoveTo(bar_x as u16, dl_bar_y as u16), 
+                 MoveTo(bar_x as u16, dl_bar_y), 
                  SetForegroundColor(Color::Yellow),
                  Print(format!(" LOAD {} ", dl_bar)),
                  ResetColor

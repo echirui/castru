@@ -35,6 +35,7 @@ struct AppState {
     current_time: f64,
     last_known_time: f64,
     last_update_instant: std::time::Instant,
+    last_system_pause_time: Option<std::time::Instant>,
     total_duration: Option<f64>,
     volume_level: Option<f32>,
     is_muted: bool,
@@ -180,6 +181,7 @@ impl CastNowCore {
             current_time: 0.0,
             last_known_time: 0.0,
             last_update_instant: std::time::Instant::now(),
+            last_system_pause_time: None,
             total_duration: None,
             volume_level: Some(1.0),
             is_muted: false,
@@ -226,6 +228,7 @@ impl CastNowCore {
                     app_state.total_duration = probe.duration;
                     app_state.video_codec = probe.video_codec;
                     app_state.audio_codec = probe.audio_codec;
+                    app_state.user_paused = false;
                 }
                 Err(e) => log::error!("Failed to load media: {}", e),
             }
@@ -253,6 +256,41 @@ impl CastNowCore {
                     }
                 }
                 _ = watchdog_interval.tick() => {
+                    // Auto-recovery from system pause
+                    if matches!(current_status, PlaybackStatus::Waiting) {
+                        if let Some(pause_start) = app_state.last_system_pause_time {
+                            if pause_start.elapsed() > Duration::from_secs(10) {
+                                // Attempt full reload to recover from potential transcoding crashes or idle states
+                                if let Some(source) = app_state.source.clone() {
+                                    let curr_time = app_state.current_time;
+                                    if let Ok((is_tx, probe, offset)) = load_media(
+                                        &app,
+                                        &server,
+                                        &source,
+                                        &server_url_base,
+                                        curr_time,
+                                        &torrent_manager,
+                                        &tui,
+                                        &mut app_state,
+                                        Some(probe_tx.clone()),
+                                    ).await {
+                                         app_state.is_transcoding = is_tx;
+                                         app_state.seek_offset = offset;
+                                         app_state.last_known_time = app_state.current_time;
+                                         app_state.last_update_instant = std::time::Instant::now();
+                                         app_state.total_duration = probe.duration;
+                                         app_state.video_codec = probe.video_codec;
+                                         app_state.audio_codec = probe.audio_codec;
+                                         app_state.user_paused = false;
+                                         // If success, Waiting status will change to PLAYING/BUFFERING via events
+                                    }
+                                }
+                                // Reset wait time to avoid spamming
+                                app_state.last_system_pause_time = Some(std::time::Instant::now()); 
+                            }
+                        }
+                    }
+
                     // Watchdog: If playing but time hasn't advanced for X seconds, resume.
                     if matches!(current_status, PlaybackStatus::Playing)
                         && app_state.last_update_instant.elapsed() > Duration::from_secs(WATCHDOG_TIMEOUT_SEC) {
@@ -279,13 +317,16 @@ impl CastNowCore {
                         TuiCommand::TogglePlay => {
                             let sid = app_state.media_session_id.unwrap_or(1);
                             match current_status {
-                                PlaybackStatus::Playing | PlaybackStatus::Buffering => {
+                                PlaybackStatus::Playing | PlaybackStatus::Buffering | PlaybackStatus::Waiting => {
                                     let _ = app.pause(sid).await;
+                                    log::info!("User toggled pause. Status: {:?} -> Paused", current_status);
                                     current_status = PlaybackStatus::Paused;
                                     app_state.user_paused = true;
+                                    app_state.last_system_pause_time = None;
                                 },
                                 _ => {
                                     let _ = app.play(sid).await;
+                                    log::info!("User toggled play. Status: {:?} -> Playing", current_status);
                                     current_status = PlaybackStatus::Playing;
                                     app_state.last_update_instant = std::time::Instant::now();
                                     app_state.user_paused = false;
@@ -295,12 +336,15 @@ impl CastNowCore {
                         TuiCommand::Pause => {
                             let sid = app_state.media_session_id.unwrap_or(1);
                             let _ = app.pause(sid).await;
+                            log::info!("User paused. Status: {:?} -> Paused", current_status);
                             current_status = PlaybackStatus::Paused;
                             app_state.user_paused = true;
+                            app_state.last_system_pause_time = None;
                         },
                         TuiCommand::Play => {
                              let sid = app_state.media_session_id.unwrap_or(1);
                              let _ = app.play(sid).await;
+                             log::info!("User played. Status: {:?} -> Playing", current_status);
                              current_status = PlaybackStatus::Playing;
                              app_state.last_update_instant = std::time::Instant::now();
                              app_state.user_paused = false;
@@ -318,6 +362,7 @@ impl CastNowCore {
                                      app_state.total_duration = probe.duration;
                                      app_state.video_codec = probe.video_codec;
                                      app_state.audio_codec = probe.audio_codec;
+                                     app_state.user_paused = false;
                                 }
                              } else {
                                  app_state.current_media_idx -= 1;
@@ -337,6 +382,7 @@ impl CastNowCore {
                                          app_state.total_duration = probe.duration;
                                          app_state.video_codec = probe.video_codec;
                                          app_state.audio_codec = probe.audio_codec;
+                                         app_state.user_paused = false;
                                     }
                                  }
                             }
@@ -355,6 +401,7 @@ impl CastNowCore {
                                              app_state.total_duration = probe.duration;
                                              app_state.video_codec = probe.video_codec;
                                              app_state.audio_codec = probe.audio_codec;
+                                             app_state.user_paused = false;
                                          },
                                          Err(e) => eprintln!("SeekForward load error: {}", e),
                                      }
@@ -380,6 +427,7 @@ impl CastNowCore {
                                              app_state.total_duration = probe.duration;
                                              app_state.video_codec = probe.video_codec;
                                              app_state.audio_codec = probe.audio_codec;
+                                             app_state.user_paused = false;
                                          },
                                          Err(e) => eprintln!("SeekBackward load error: {}", e),
                                      }
@@ -409,11 +457,13 @@ impl CastNowCore {
                         TuiCommand::Stop => {
                             let sid = app_state.media_session_id.unwrap_or(1);
                             let _ = app.pause(sid).await;
+                            log::info!("User stopped. Status: {:?} -> Finished", current_status);
                             current_status = PlaybackStatus::Finished;
                             app_state.torrent_handle = None;
                             app_state.torrent_progress = None;
                         },
                         TuiCommand::Reconnect => {
+                            log::info!("User reconnecting. Status: {:?} -> Reconnecting", current_status);
                             current_status = PlaybackStatus::Reconnecting;
                             // Draw RECONNECTING
                              let tui_state = TuiState {
@@ -442,6 +492,7 @@ impl CastNowCore {
                                 }
                                 Err(e) => {
                                     eprintln!("Reconnect failed: {}", e);
+                                    log::error!("Reconnect failed: {}", e);
                                     current_status = PlaybackStatus::Idle;
                                 }
                             }
@@ -488,13 +539,49 @@ impl CastNowCore {
                                   }
 
                                   match s.player_state.as_str() {
-                                      "PLAYING" => current_status = PlaybackStatus::Playing,
-                                      "PAUSED" => current_status = PlaybackStatus::Paused,
-                                      "BUFFERING" => current_status = PlaybackStatus::Buffering,
+                                      "PLAYING" => {
+                                          if current_status != PlaybackStatus::Playing {
+                                              log::info!("Receiver reported PLAYING. Status: {:?} -> Playing", current_status);
+                                          }
+                                          current_status = PlaybackStatus::Playing;
+                                          app_state.last_system_pause_time = None;
+                                          app_state.user_paused = false;
+                                      },
+                                      "PAUSED" => {
+                                          if app_state.user_paused {
+                                              if current_status != PlaybackStatus::Paused {
+                                                  log::info!("Receiver reported PAUSED (User). Status: {:?} -> Paused", current_status);
+                                              }
+                                              current_status = PlaybackStatus::Paused;
+                                              app_state.last_system_pause_time = None;
+                                          } else if current_status == PlaybackStatus::Buffering {
+                                              // Keep buffering state if we initiated it (don't switch to Waiting)
+                                              log::debug!("Receiver reported PAUSED (Buffering). Keeping Buffering state.");
+                                              current_status = PlaybackStatus::Buffering;
+                                          } else {
+                                              // System pause detected
+                                              if current_status != PlaybackStatus::Waiting {
+                                                  log::info!("Receiver reported PAUSED (System). Status: {:?} -> Waiting", current_status);
+                                              }
+                                              current_status = PlaybackStatus::Waiting;
+                                              if app_state.last_system_pause_time.is_none() {
+                                                  app_state.last_system_pause_time = Some(std::time::Instant::now());
+                                              }
+                                          }
+                                      },
+                                      "BUFFERING" => {
+                                          if current_status != PlaybackStatus::Buffering {
+                                              log::info!("Receiver reported BUFFERING. Status: {:?} -> Buffering", current_status);
+                                          }
+                                          current_status = PlaybackStatus::Buffering;
+                                      },
                                       "IDLE" => {
+                                           if current_status != PlaybackStatus::Idle {
+                                               log::info!("Receiver reported IDLE ({:?}). Status: {:?} -> Idle", s.idle_reason, current_status);
+                                           }
                                            current_status = PlaybackStatus::Idle;
-                                           if s.idle_reason.as_deref() == Some("ERROR") {
-                                                log::warn!("Watchdog: Detected Error status. Resuming...");
+                                           if s.idle_reason.as_deref() == Some("ERROR") || s.idle_reason.as_deref() == Some("INTERRUPTED") {
+                                                log::warn!("Watchdog: Detected Error/Interrupted status ({:?}). Resuming...", s.idle_reason);
                                                 if let Some(source) = app_state.source.clone() {
                                                     let curr_time = app_state.current_time;
                                                                                                     if let Ok((is_tx, probe, offset)) = load_media(
@@ -513,47 +600,61 @@ impl CastNowCore {
                                                          app_state.seek_offset = offset;
                                                          app_state.last_known_time = app_state.current_time;
                                                          app_state.last_update_instant = std::time::Instant::now();
-                                                         app_state.total_duration = probe.duration;
-                                                         app_state.video_codec = probe.video_codec;
-                                                         app_state.audio_codec = probe.audio_codec;
-                                                    }
-                                                }
-                                           } else if s.idle_reason.as_deref() == Some("FINISHED") {
-                                                let next_idx = app_state.current_media_idx + 1;
-                                                if next_idx < playlist.len() || self.config.loop_playlist {
-                                                    let target_idx = if next_idx < playlist.len() { next_idx } else { 0 };
-                                                    if let Some(source) = playlist.get(target_idx) {
-                                                        app_state.current_media_idx = target_idx;
-                                                        app_state.source = Some(source.clone());
-                                                        match load_media(
-                                                            &app,
-                                                            &server,
-                                                            source,
-                                                            &server_url_base,
-                                                            0.0,
-                                                            &torrent_manager,
-                                                            &tui,
-                                                            &mut app_state,
-                                                            Some(probe_tx.clone()),
-                                                        ).await {
-                                                            Ok((is_tx, probe, offset)) => {
-                                                                 app_state.is_transcoding = is_tx;
-                                                                 app_state.seek_offset = offset;
-                                                                 app_state.current_time = offset;
-                                                                 app_state.last_known_time = offset;
-                                                                 app_state.last_update_instant = std::time::Instant::now();
-                                                                 app_state.total_duration = probe.duration;
-                                                                 app_state.video_codec = probe.video_codec;
-                                                                 app_state.audio_codec = probe.audio_codec;
-                                                            },
-                                                            Err(e) => log::error!("Failed to load next media: {}", e),
-                                                        }
-                                                    }
-                                                }
-                                           }
-                                      },
-                                      _ => {}
-                                  }
+                                                                                                              app_state.total_duration = probe.duration;
+                                                                                                              app_state.video_codec = probe.video_codec;
+                                                                                                              app_state.audio_codec = probe.audio_codec;
+                                                                                                              app_state.user_paused = false;
+                                                                                                         }
+                                                                                                     }
+                                                                                                                                       } else if s.idle_reason.as_deref() == Some("FINISHED") {
+                                                                                                                                            // Check if we really finished or if it was a drop
+                                                                                                                                            let total = app_state.total_duration.unwrap_or(0.0);
+                                                                                                                                            // Use a threshold (e.g. within 10s of end)
+                                                                                                                                                                                        if total > 0.0 && (total - app_state.current_time) > 10.0 {
+                                                                                                                                                                                            // Premature finish (likely transcoding crash/eof)
+                                                                                                                                                                                            log::warn!("Premature FINISHED detected (Current: {:.1}, Total: {:.1}). Status: {:?} -> Waiting", app_state.current_time, total, current_status);
+                                                                                                                                                                                            current_status = PlaybackStatus::Waiting;
+                                                                                                                                                                                            if app_state.last_system_pause_time.is_none() {
+                                                                                                                                                                                                app_state.last_system_pause_time = Some(std::time::Instant::now());
+                                                                                                                                                                                            }
+                                                                                                                                                                                        } else {
+                                                                                                                                                                                            log::info!("Track finished normally. Loading next...");
+                                                                                                                                                                                            let next_idx = app_state.current_media_idx + 1;                                                                                                                                                if next_idx < playlist.len() || self.config.loop_playlist {
+                                                                                                                                                    let target_idx = if next_idx < playlist.len() { next_idx } else { 0 };
+                                                                                                                                                    if let Some(source) = playlist.get(target_idx) {
+                                                                                                                                                        app_state.current_media_idx = target_idx;
+                                                                                                                                                        app_state.source = Some(source.clone());
+                                                                                                                                                        match load_media(
+                                                                                                                                                            &app,
+                                                                                                                                                            &server,
+                                                                                                                                                            source,
+                                                                                                                                                            &server_url_base,
+                                                                                                                                                            0.0,
+                                                                                                                                                            &torrent_manager,
+                                                                                                                                                            &tui,
+                                                                                                                                                            &mut app_state,
+                                                                                                                                                            Some(probe_tx.clone()),
+                                                                                                                                                        ).await {
+                                                                                                                                                            Ok((is_tx, probe, offset)) => {
+                                                                                                                                                                 app_state.is_transcoding = is_tx;
+                                                                                                                                                                 app_state.seek_offset = offset;
+                                                                                                                                                                 app_state.current_time = offset;
+                                                                                                                                                                 app_state.last_known_time = offset;
+                                                                                                                                                                 app_state.last_update_instant = std::time::Instant::now();
+                                                                                                                                                                                                                              app_state.total_duration = probe.duration;
+                                                                                                                                                                                                                              app_state.video_codec = probe.video_codec;
+                                                                                                                                                                                                                              app_state.audio_codec = probe.audio_codec;
+                                                                                                                                                                                                                              app_state.user_paused = false;
+                                                                                                                                                                                                                         },
+                                                                                                                                                                                                                         Err(e) => log::error!("Failed to load next media: {}", e),
+                                                                                                                                                        }
+                                                                                                                                                    }
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                       }
+                                                                                                                                  },
+                                                                                                                                  _ => {}
+                                                                                                                              }
                                   let tui_state = TuiState {
                                         status: format!("{:?}", current_status),
                                         current_time: app_state.current_time as f32,
@@ -617,16 +718,17 @@ impl CastNowCore {
 
                                      if margin < BUFFER_UNDERRUN_THRESHOLD && pct < 100.0 {
                                          if matches!(current_status, PlaybackStatus::Playing) {
+                                             log::info!("Auto-buffering: Margin {:.1}% < Threshold. Pausing. Status: {:?} -> Buffering", margin, current_status);
                                              let _ = app.pause(sid).await;
                                              current_status = PlaybackStatus::Buffering;
                                          }
-                                     } else if margin > BUFFER_RESUME_THRESHOLD || pct >= 100.0 {
-                                         if matches!(current_status, PlaybackStatus::Buffering) {
+                                     } else if (margin > BUFFER_RESUME_THRESHOLD || pct >= 100.0)
+                                         && matches!(current_status, PlaybackStatus::Buffering) {
+                                             log::info!("Auto-buffering: Margin {:.1}% > Threshold. Resuming. Status: {:?} -> Playing", margin, current_status);
                                              let _ = app.play(sid).await;
                                              current_status = PlaybackStatus::Playing;
                                              app_state.last_update_instant = std::time::Instant::now();
                                          }
-                                     }
                                  }
                              }
                          }
