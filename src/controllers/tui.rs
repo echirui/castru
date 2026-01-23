@@ -125,10 +125,9 @@ impl TuiController {
         // Colors
         let status_color = match state.status.to_uppercase().as_str() {
             "PLAYING" => Color::Green,
-            "PAUSED" => Color::Yellow,
             "BUFFERING" => Color::Blue,
+            "WAITING" => Color::Cyan,
             "RECONNECTING" => Color::Magenta,
-            "WAITING" => Color::Magenta,
             _ => Color::Grey,
         };
 

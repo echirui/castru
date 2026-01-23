@@ -23,7 +23,6 @@ pub enum PlaybackStatus {
     Idle,
     Buffering,
     Playing,
-    Paused,
     Finished,
     Reconnecting,
     Waiting,
@@ -92,7 +91,7 @@ impl MediaController {
     ) -> Result<(), CastError> {
         match current_status {
             PlaybackStatus::Playing => self.pause(media_session_id).await,
-            PlaybackStatus::Paused | PlaybackStatus::Idle => self.play(media_session_id).await,
+            PlaybackStatus::Waiting | PlaybackStatus::Idle => self.play(media_session_id).await,
             _ => Ok(()),
         }
     }
