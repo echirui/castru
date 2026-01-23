@@ -26,6 +26,7 @@ pub enum PlaybackStatus {
     Paused,
     Finished,
     Reconnecting,
+    Waiting,
 }
 
 /// Controller for the Media namespace.
