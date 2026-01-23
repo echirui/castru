@@ -50,4 +50,10 @@ tests/
 
 
 <!-- MANUAL ADDITIONS START -->
+- 018-castnow-feature-parity: Implemented advanced CLI options, subtitles, torrent stability, and playlist loop.
+- 006-castnow-tui: Added panic hooks, title truncation, and TUI cleanup.
+- 022-show-max-duration: Added background media probing for duration display during torrent buffering.
+- 023-auto-resume-buffering: Implemented auto-pause/resume logic based on buffer thresholds.
+- 024-show-seek-and-download-bars: Implemented dual seek/download bar in TUI with dynamic layout.
+- 007-visual-tui: Implemented full visual TUI with ascii projector animation.
 <!-- MANUAL ADDITIONS END -->
