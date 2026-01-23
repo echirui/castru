@@ -247,64 +247,40 @@ impl TuiController {
         .ok();
 
         // 6. Seekbar
-
         let bar_width = (cols as usize).saturating_sub(20).max(10);
-
         let bar_x = (cols as usize - bar_width) / 2;
-
         let bar_y = tm_y + 1;
 
         let progress_bar = render_progress_bar(state.current_time, state.total_duration, bar_width);
 
-        // Show download progress if active
-        let mut progress_shown = false;
-        if let Some(pct) = state.torrent_progress {
-            if state.status.to_uppercase().contains("BUFFERING") {
-                 // Overwrite center area with download stats
-                 let dl_text = format!(" DOWNLOADING: {:.1}% ", pct);
-                 let dl_y = cy;
-                 let dl_x = (cols as usize).saturating_sub(dl_text.len()) / 2;
-                 execute!(stdout, 
-                     MoveTo(dl_x as u16, dl_y), 
-                     SetForegroundColor(Color::Yellow),
-                     Print(dl_text),
-                     ResetColor
-                 ).ok();
-                 
-                 let dl_bar_width = (cols as usize).saturating_sub(20).max(10);
-                 let dl_bar_x = (cols as usize - dl_bar_width) / 2;
-                 let dl_bar_y = dl_y + 1;
-                 let dl_bar = render_progress_bar(pct, Some(100.0), dl_bar_width);
-                 execute!(stdout, 
-                     MoveTo(dl_bar_x as u16, dl_bar_y), 
-                     SetForegroundColor(Color::Yellow),
-                     Print(format!(" {} ", dl_bar)),
-                     ResetColor
-                 ).ok();
-                 progress_shown = true;
-            }
-        }
+        // Draw Seekbar
+        execute!(stdout,
+            MoveTo(bar_x as u16, bar_y as u16), 
+            SetForegroundColor(Color::White),
+            Print(format!(" PLAY {} ", progress_bar)),
+            ResetColor
+        ).ok();
 
-        if !progress_shown {
-            // Normal seekbar rendering
-            execute!(stdout, 
-                MoveTo(bar_x as u16, bar_y), 
-                SetForegroundColor(Color::White),
-                Print(format!(" {} ", progress_bar)),
-                ResetColor
-            ).ok();
+        // 6b. Download Bar (Stacked below seekbar)
+        let mut extra_y = 1;
+        if let Some(pct) = state.torrent_progress {
+             let dl_bar_y = bar_y + extra_y;
+             let dl_bar = render_progress_bar(pct, Some(100.0), bar_width);
+             execute!(stdout, 
+                 MoveTo(bar_x as u16, dl_bar_y as u16), 
+                 SetForegroundColor(Color::Yellow),
+                 Print(format!(" LOAD {} ", dl_bar)),
+                 ResetColor
+             ).ok();
+             extra_y += 1;
         }
 
         // 7. Codecs
-
         let v_c = state.video_codec.as_deref().unwrap_or("unknown");
-
         let a_c = state.audio_codec.as_deref().unwrap_or("unknown");
-
         let codec_str = format!(" Video: {} | Audio: {} ", v_c, a_c);
 
-        let cd_y = bar_y + 1;
-
+        let cd_y = bar_y + extra_y;
         let cd_x = (cols as usize).saturating_sub(codec_str.len()) / 2;
 
         execute!(
