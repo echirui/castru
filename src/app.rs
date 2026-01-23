@@ -575,39 +575,18 @@ impl CastNowCore {
                                           }
                                           current_status = PlaybackStatus::Buffering;
                                       },
-                                      "IDLE" => {
-                                           if current_status != PlaybackStatus::Idle {
-                                               log::info!("Receiver reported IDLE ({:?}). Status: {:?} -> Idle", s.idle_reason, current_status);
-                                           }
-                                           current_status = PlaybackStatus::Idle;
-                                           if s.idle_reason.as_deref() == Some("ERROR") || s.idle_reason.as_deref() == Some("INTERRUPTED") {
-                                                log::warn!("Watchdog: Detected Error/Interrupted status ({:?}). Resuming...", s.idle_reason);
-                                                if let Some(source) = app_state.source.clone() {
-                                                    let curr_time = app_state.current_time;
-                                                                                                    if let Ok((is_tx, probe, offset)) = load_media(
-                                                                                                        &app,
-                                                                                                        &server,
-                                                                                                        &source,
-                                                                                                        &server_url_base,
-                                                                                                        curr_time,
-                                                                                                        &torrent_manager,
-                                                                                                        &tui,
-                                                                                                        &mut app_state,
-                                                                                                        Some(probe_tx.clone()),
-                                                                                                    )
-                                                                                                    .await
-                                                                                                    {                                                         app_state.is_transcoding = is_tx;
-                                                         app_state.seek_offset = offset;
-                                                         app_state.last_known_time = app_state.current_time;
-                                                         app_state.last_update_instant = std::time::Instant::now();
-                                                                                                              app_state.total_duration = probe.duration;
-                                                                                                              app_state.video_codec = probe.video_codec;
-                                                                                                              app_state.audio_codec = probe.audio_codec;
-                                                                                                              app_state.user_paused = false;
-                                                                                                         }
-                                                                                                     }
-                                                                                                                                       } else if s.idle_reason.as_deref() == Some("FINISHED") {
-                                                                                                                                            // Check if we really finished or if it was a drop
+                                                                            "IDLE" => {
+                                                                                 if current_status != PlaybackStatus::Idle {
+                                                                                     log::info!("Receiver reported IDLE ({:?}). Status: {:?} -> Idle", s.idle_reason, current_status);
+                                                                                 }
+                                                                                 current_status = PlaybackStatus::Idle;
+                                                                                 if s.idle_reason.as_deref() == Some("ERROR") || s.idle_reason.as_deref() == Some("INTERRUPTED") {
+                                                                                      log::warn!("Detected Error/Interrupted status ({:?}). Transitioning to Waiting for auto-recovery...", s.idle_reason);
+                                                                                      current_status = PlaybackStatus::Waiting;
+                                                                                      if app_state.last_system_pause_time.is_none() {
+                                                                                          app_state.last_system_pause_time = Some(std::time::Instant::now());
+                                                                                      }
+                                                                                 } else if s.idle_reason.as_deref() == Some("FINISHED") {                                                                                                                                            // Check if we really finished or if it was a drop
                                                                                                                                             let total = app_state.total_duration.unwrap_or(0.0);
                                                                                                                                             // Use a threshold (e.g. within 10s of end)
                                                                                                                                                                                         if total > 0.0 && (total - app_state.current_time) > 10.0 {
